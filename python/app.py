@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shioaji_bridge import bridge
-from indicators import add_indicators
+from indicators import add_indicators_v2
 from report_generator import generate_ai_markdown
 
 app = FastAPI()
@@ -32,7 +32,7 @@ def get_kline_data(symbol: str):
         if df is None:
             return {"error": "沒資料", "symbol": symbol}
 
-        df_analyzed = add_indicators(df)
+        df_analyzed = add_indicators_v2(df)
         return df_analyzed.tail(100).to_dict(orient="records")
 
     except Exception as e:
