@@ -7,6 +7,7 @@ import Todo from "@/pages/Todo.vue"
 export const router = createRouter({
 history: createWebHistory(),
 routes: [
-
-]
+    { path: "/todo", component: Todo},
+    { path: "/portfolio", component: Portfolio},
+],
 });
