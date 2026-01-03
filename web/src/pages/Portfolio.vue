@@ -1,7 +1,20 @@
-<template>
-	<div>
-		<h1>我的投資組合</h1>
-		<p>這裡將透過後端 API 取得持倉與交易紀錄 [3]。</p>
-		<!-- 我們接下來會在這裡加入表格組件 -->
-	</div>
-</template>
+<script setup>
+import { ref, computed } from "vue";
+
+// 狀態控制
+const loading = ref(false);
+
+const totalAssets = ref(1250000);
+const totalUnrealized = ref(45800);
+const totalReturnRate = ref(3.65);
+const realizedDay = ref(1200);
+
+// 貨幣格式化
+const formatCurrency = value => {
+	return new Intl.NumberFormate("zh-TW", {
+		stype: "currency",
+		currency: "TWD",
+		maximumFractionDigits: 0,
+	}).format(value);
+};
+</script>
