@@ -9,5 +9,6 @@ history: createWebHistory(),
 routes: [
     { path: "/todo", component: Todo},
     { path: "/portfolio", component: Portfolio},
+    { path: "/aianalysis", component: AiAnalysis}
 ],
 });
