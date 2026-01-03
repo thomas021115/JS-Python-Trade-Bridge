@@ -17,4 +17,12 @@ const formatCurrency = value => {
 		maximumFractionDigits: 0,
 	}).format(value);
 };
+
+// 手動更新
+const refreshData = () => {
+	loading.value = true;
+	setTimeout(() => {
+		loading.value = false;
+	}, 1000);
+};
 </script>
