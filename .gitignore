@@ -400,3 +400,7 @@ FodyWeavers.xsd
 .env
 python/.env
 js/.env
+
+.DS_Store
+**/.DS_Store
+.vscode/
