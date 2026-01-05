@@ -26,3 +26,18 @@ const refreshData = () => {
 	}, 1000);
 };
 </script>
+
+<template>
+	<div class="min-h-screen g-slate-900 text-slate-100 p-6">
+		<!-- 頂部導航 -->
+		<div class="">
+			<h1>股票帳務</h1>
+			<p>現貨資產狀態</p>
+		</div>
+
+		<button @click="refeshData" :disabled="loading">
+			<span v-if="loading">讀取中...</span>
+			<span v-else>刷新報價</span>
+		</button>
+	</div>
+</template>
