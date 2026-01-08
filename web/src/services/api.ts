@@ -15,7 +15,7 @@ export interface KlineData {
 
 //AI 摘要介面 (對應 /api/ai-briefing/{code})
 
-export interface briefingRow {
+export interface BriefingRow {
     ts: string;
     open: number;
     high: number;
@@ -24,9 +24,9 @@ export interface briefingRow {
     volume: number;
 }
 
-export interface briefingRespones {
+export interface BriefingResponse {
     code: string;
-    rows: briefingRow[];
+    rows: BriefingRow[];
     error?: string;
 }
 
@@ -37,13 +37,13 @@ export interface MarketSummary {
         medium: 'up' | 'down' | 'range';
     };
 }
-
+// 獲取python裡的輸出
 export const api = {
     getKline: (symbol: string) => {
         return http.get<any, KlineData[]>(`/api/kline/${symbol}`);
     },
     getAiBriefing: (code: string) => {
-        return http.get<any, briefingRespones[]>(`/api/ai-briefing/${code}`);
+        return http.get<any, BriefingResponse>(`/api/ai-briefing/${code}`);
     },
 
 };
