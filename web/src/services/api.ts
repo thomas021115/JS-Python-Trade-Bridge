@@ -37,6 +37,12 @@ export interface MarketSummary {
         medium: 'up' | 'down' | 'range';
     };
 }
+export interface AiReportResponse {
+    code: string;
+    report?: string;
+    error?: string;
+}
+
 // 獲取python裡的輸出
 export const api = {
     getKline: (symbol: string) => {
@@ -45,5 +51,8 @@ export const api = {
     getAiBriefing: (code: string) => {
         return http.get<any, BriefingResponse>(`/api/ai-briefing/${code}`);
     },
+    getAiReport: (code: string) => {
+        return http.get<any, AiReportResponse>(`/api/ai-report/${code}`);
+    }
 
 };
