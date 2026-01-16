@@ -12,7 +12,7 @@ const realizedDay = ref(1200);
 // 貨幣格式化
 const formatCurrency = value => {
 	return new Intl.NumberFormat("zh-TW", {
-		stype: "currency",
+		style: "currency",
 		currency: "TWD",
 		maximumFractionDigits: 0,
 	}).format(value);
@@ -62,6 +62,18 @@ const refreshData = () => {
 			>
 				{{ totalUnrealized >= 0 ? "+" : ""
 				}}{{ formatCurrency(totalUnrealized) }}
+				<span>{{ totalReturnRate }}%</span>
+			</div>
+		</div>
+
+		<!-- 今日已實現 -->
+		<div class="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+			<h3 class="text-slate-400 text-sm mb-2">今日已實現</h3>
+			<div
+				class="text-2xl font-mono font-bold"
+				:class="realizedDay >= 0 ? 'text-red-400' : 'text-slate-100'"
+			>
+				{{ formatCurrency(realizedDay) }}
 			</div>
 		</div>
 	</div>
