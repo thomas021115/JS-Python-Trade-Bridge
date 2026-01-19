@@ -23,6 +23,16 @@ async function fetchBriefing() {};
 
 async function fetchReport(){
   console.log("[door] fetchReport called");
+
+
+  try {
+    console.log("[before api]");
+    const res = await api.getAiReport(symbol.value);
+    console.log("[after] res" , res);
+  }catch (err){
+    console.log("[catch error]", err);
+    
+  }
   
 };
 
