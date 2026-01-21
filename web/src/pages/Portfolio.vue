@@ -14,10 +14,10 @@ const positions = ref([
 	{
 		code: "2330",
 		name: "台積電",
-		quantity: 2000, // 2張
+		quantity: 2000, // 股數
 		price: 580.5, // 平均成本
 		current_price: 1030, // 目前市價
-		pnl: 899000, // 未實現損益 (模擬算好的)
+		pnl: 899000, // 未實現損益
 		pnl_rate: 77.43, // 報酬率 (%)
 	},
 	{
@@ -130,33 +130,74 @@ const refreshData = () => {
 		</div>
 	</div>
 	<div v-if="activeTab === 'positions'" class="overflow-x-auto">
-		<table>
+		<table class="w-full text-left border-collapse">
 			<thead>
-				<tr>
-					<th class="text-left p-4">股票代碼</th>
-					<th class="text-left p-4">名稱</th>
-					<th class="text-left p-4">股數</th>
-					<th class="text-left p-4">平均成本</th>
-					<th class="text-left p-4">目前市價</th>
-					<th class="text-left p-4">未實現損益</th>
+				<tr class="bg-slate-700/50 text-sm">
+					<th class="p-4 font-medium">商品</th>
+					<th class="p-4 font-medium text-right">庫存</th>
+					<th class="p-4 font-medium text-right">均價 / 現價</th>
+					<th class="p-4 font-medium text-right">市值</th>
+					<th class="p-4 font-medium text-right">損益 (%)</th>
+					<th class="p-4 font-medium text-center">AI分析</th>
 				</tr>
 			</thead>
-			<tbody>
-				<tr v-for="(position, index) in positions" :key="index">
-					<td class="p-4">{{ position.code }}</td>
-					<td class="p-4">{{ position.name }}</td>
-					<td class="p-4">{{ position.quantity }}</td>
-					<td class="p-4">{{ formatCurrency(position.price) }}</td>
-					<td class="p-4">{{ formatCurrency(position.current_price) }}</td>
-					<td
-						class="p-4"
-						:class="position.pnl >= 0 ? 'text-red-500' : 'text-green-500'"
-					>
-						{{ formatCurrency(position.pnl) }}
-						({{ position.pnl_rate }}%)
+			<tbody class="divide-y divide-slate-700 text-sm">
+				<tr
+					v-for="pos in positions"
+					:key="pos.code"
+					class="hover:bg-slate-700/30 active:bg-slate-700/50 transition-colors cursor-pointer"
+				>
+					<!-- 商品 -->
+					<td class="p-4">
+						<div class="font-bold text-white">{{ pos.name }}</div>
+						<div class="text-xs text-slate-500">{{ pos.code }}</div>
+					</td>
+
+					<!-- 庫存 -->
+					<td class="p-4 text-right font-mono text-white">
+						{{ pos.quantity }}
+					</td>
+
+					<!-- 均價 / 現價 -->
+					<td class="p-4 text-right">
+						<div class="font-mono text-white">{{ pos.current_price }}</div>
+						<div class="text-xs text-slate-500">成本: {{ pos.price }}</div>
+					</td>
+
+					<!-- 市值 -->
+					<td class="p-4 text-right font-mono text-slate-300">
+						{{ formatCurrency(pos.quantity * pos.current_price) }}
+					</td>
+
+					<!-- 損益 (紅漲綠跌邏輯) -->
+					<td class="p-4 text-right font-mono font-bold">
+						<div :class="pos.pnl >= 0 ? 'text-red-500' : 'text-green-500'">
+							{{ pos.pnl >= 0 ? "+" : "" }}{{ formatCurrency(pos.pnl) }}
+						</div>
+						<div
+							:class="pos.pnl_rate >= 0 ? 'text-red-500' : 'text-green-500'"
+							class="text-xs"
+						>
+							{{ pos.pnl_rate }}%
+						</div>
+					</td>
+
+					<!-- 操作按鈕 -->
+					<td class="p-4 text-center">
+						<button
+							@click="analyzeStock(pos.code)"
+							class="px-3 py-1 bg-indigo-500/20 text-indigo-300 border border-indigo-500/50 rounded hover:bg-indigo-500/40 transition-colors text-xs"
+						>
+							分析走勢
+						</button>
 					</td>
 				</tr>
 			</tbody>
 		</table>
+
+		<!-- 無資料時的提示 -->
+		<div v-if="positions.length === 0" class="p-8 text-center text-slate-500">
+			目前沒有持倉
+		</div>
 	</div>
 </template>
