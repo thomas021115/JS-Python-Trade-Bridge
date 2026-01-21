@@ -63,3 +63,16 @@ def ai_briefing(code: str):
     rows = df2[cols].tail(5).to_dict(orient="records")
     return {"code": code, "rows": rows}
 
+@app.get("/api/ai-report/{code}")
+def ai_report(code: str):
+    df = bridge.get_kbars(code)
+    if df is None:
+        return {"error": "沒資料", "code": code}
+
+    df = add_indicators(df)
+    md = generate_ai_markdown(code, df)
+
+    return {
+        "code": code,
+        "report": md
+    }
