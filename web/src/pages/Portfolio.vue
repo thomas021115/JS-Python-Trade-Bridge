@@ -8,6 +8,28 @@ const totalAssets = ref(1250000);
 const totalUnrealized = ref(45800);
 const totalReturnRate = ref(3.65);
 const realizedDay = ref(1200);
+const activeTab = ref("positions"); // 'positions' | 'accounting'
+
+const positions = ref([
+	{
+		code: "2330",
+		name: "台積電",
+		quantity: 2000, // 2張
+		price: 580.5, // 平均成本
+		current_price: 1030, // 目前市價
+		pnl: 899000, // 未實現損益 (模擬算好的)
+		pnl_rate: 77.43, // 報酬率 (%)
+	},
+	{
+		code: "2603",
+		name: "長榮",
+		quantity: 5000,
+		price: 185.0,
+		current_price: 170.5,
+		pnl: -72500,
+		pnl_rate: -7.83,
+	},
+]);
 
 // 貨幣格式化
 const formatCurrency = value => {
@@ -76,5 +98,65 @@ const refreshData = () => {
 				{{ formatCurrency(realizedDay) }}
 			</div>
 		</div>
+	</div>
+
+	<!-- 分頁標籤 -->
+	<div
+		class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden mt-8"
+	>
+		<div class="flex border-b border-slate-700">
+			<button
+				@click="activeTab = 'positions'"
+				class="px-6 py-4 text-sm font-medium transition-colors"
+				:class="
+					activeTab === 'positions'
+						? 'text-blue-400 border-b-2 border-blue-400 bg-slate-700/50'
+						: 'text-slate-400 hover:text-white'
+				"
+			>
+				庫存部位
+			</button>
+			<button
+				@click="activeTab = 'accounting'"
+				class="px-6 py-4 text-sm font-medium transition-colors"
+				:class="
+					activeTab === 'accounting'
+						? 'text-blue-400 border-b-2 border-blue-400 bg-slate-700/50'
+						: 'text-slate-400 hover:text-white'
+				"
+			>
+				帳務明細 (Coming Soon)
+			</button>
+		</div>
+	</div>
+	<div v-if="activeTab === 'positions'" class="overflow-x-auto">
+		<table>
+			<thead>
+				<tr>
+					<th class="text-left p-4">股票代碼</th>
+					<th class="text-left p-4">名稱</th>
+					<th class="text-left p-4">股數</th>
+					<th class="text-left p-4">平均成本</th>
+					<th class="text-left p-4">目前市價</th>
+					<th class="text-left p-4">未實現損益</th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr v-for="(position, index) in positions" :key="index">
+					<td class="p-4">{{ position.code }}</td>
+					<td class="p-4">{{ position.name }}</td>
+					<td class="p-4">{{ position.quantity }}</td>
+					<td class="p-4">{{ formatCurrency(position.price) }}</td>
+					<td class="p-4">{{ formatCurrency(position.current_price) }}</td>
+					<td
+						class="p-4"
+						:class="position.pnl >= 0 ? 'text-red-500' : 'text-green-500'"
+					>
+						{{ formatCurrency(position.pnl) }}
+						({{ position.pnl_rate }}%)
+					</td>
+				</tr>
+			</tbody>
+		</table>
 	</div>
 </template>
