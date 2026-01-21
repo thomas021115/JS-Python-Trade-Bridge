@@ -5,21 +5,16 @@ import type { BriefingResponse , AiReportResponse } from "@/services/api";
 
 const symbol = ref("2330");
 
-const briefing = ref<BriefingResponse | null>(null);
 const report = ref<AiReportResponse | null>(null);
 
-const loadingBriefing = ref(false);
 const loadingReport = ref(false);
 
 const errorMsg = ref<string | null>(null);
 
 console.log("[init]", {
   symbol: symbol.value,
-  briefing: briefing.value,
   report: report.value,
 });
-
-async function fetchBriefing() {};
 
 async function fetchReport(){
   console.log("[door] fetchReport called");
@@ -29,16 +24,26 @@ async function fetchReport(){
     console.log("[before api]");
     const res = await api.getAiReport(symbol.value);
     console.log("[after] res" , res);
-  }catch (err){
+
+    if(res.error){
+      errorMsg.value = res.error;
+      console.log("[res.error]",res.error);
+      return;
+    }
+    report.value = res;
+    console.log("[res.error]",res.error);
+
+  } catch (err) {
+    errorMsg.value = "抓取資料失敗 (console / Network)"
     console.log("[catch error]", err);
-    
+  }finally {
+    loadingReport.value = false;
+    console.log("[finally] loadingReport=false");
   }
-  
 };
 
-
-
 </script>
+
 <template>
   <div style="padding:16px">
     <input v-model="symbol" />
