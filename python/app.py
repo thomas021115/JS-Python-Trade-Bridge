@@ -69,7 +69,7 @@ def ai_report(code: str):
     if df is None:
         return {"error": "沒資料", "code": code}
 
-    df = add_indicators(df)
+    df = add_indicators_v2(df)
     md = generate_ai_markdown(code, df)
 
     return {
