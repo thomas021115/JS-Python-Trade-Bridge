@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { api } from "@/services/api";
 import type { AiReportResponse } from "@/services/api";
+import { downloadMarkdown , buildReportFilename } from "@/utils/download";
 
 const symbol = ref("2330");
 
@@ -35,8 +36,8 @@ async function fetchReport(){
     report.value = res;
     console.log("[res.error]",res.report?.length);
 
-    const filename = buildMdFilename(res.code);
-    downloadTextAsFile(filename, res.report ?? "");
+    const filename = buildReportFilename(res.code);
+    downloadMarkdown(filename, res.report ?? "");
 
   } catch (err) {
     errorMsg.value = "抓取資料失敗 (console / Network)"
@@ -46,29 +47,6 @@ async function fetchReport(){
     console.log("[finally] loadingReport=false");
   }
 };
-
-function downloadTextAsFile(filename: string, content: string ){
- const blob = new Blob([content], {type: "text/markdown;charset=utf-8"});
- const url = URL.createObjectURL(blob);
-
- const link = document.createElement("a");
- link.href = url;
- link.download = filename;
- link.click();
-
- URL.revokeObjectURL(url);
-}
-
-function buildMdFilename(code: string){
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2,"0");
-  const dd = String(d.getDate()).padStart(2,"0");
-  const hh = String(d.getHours()).padStart(2,"0");
-  const min = String(d.getMinutes()).padStart(2,"0");
-  return `ai-report_${code}_${yyyy}${mm}${dd}_${hh}${min}.md`
-}
-
 
 
 </script>
