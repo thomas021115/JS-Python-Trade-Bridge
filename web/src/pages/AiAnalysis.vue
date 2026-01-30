@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { api } from "@/services/api";
 import type { AiReportResponse } from "@/services/api";
 import { downloadMarkdown , buildReportFilename } from "@/utils/download";
+import { toast } from "vue3-toastify";
 
 const symbol = ref("2330");
 
@@ -30,6 +31,7 @@ async function fetchReport(){
 
     if(res.error){
       errorMsg.value = res.error;
+      toast.error(errorMsg.value);
       console.log("[res.error]",res.error);
       return;
     }
@@ -39,8 +41,11 @@ async function fetchReport(){
     const filename = buildReportFilename(res.code);
     downloadMarkdown(filename, res.report ?? "");
 
+    toast.success("下載完成");
+
   } catch (err) {
-    errorMsg.value = "抓取資料失敗 (console / Network)"
+    errorMsg.value = "抓取資料失敗 (console / Network)";
+    toast.error(errorMsg.value);
     console.log("[catch error]", err);
   }finally {
     loadingReport.value = false;
