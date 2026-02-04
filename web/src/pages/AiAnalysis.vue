@@ -5,6 +5,8 @@ import type { AiReportResponse } from "@/services/api";
 import { downloadMarkdown , buildReportFilename } from "@/utils/download";
 import { toast } from "vue3-toastify";
 import PageShell from "@/components/layout/PageShell.vue";
+import AppCard from "@/components/ui/AppCard.vue";
+
 
 const symbol = ref("2330");
 
@@ -59,7 +61,7 @@ async function fetchReport(){
 
 <template>
   <PageShell>
-    <AppCard class="space-y-8">
+    <AppCard>
       <div class="flex items-start justify-between">
         <div>
           <h1 class="text-2xl font-bold tracking-tight text-slate-900">
