@@ -4,6 +4,7 @@ import { api } from "@/services/api";
 import type { AiReportResponse } from "@/services/api";
 import { downloadMarkdown , buildReportFilename } from "@/utils/download";
 import { toast } from "vue3-toastify";
+import PageShell from "@/components/layout/PageShell.vue";
 
 const symbol = ref("2330");
 
@@ -57,8 +58,8 @@ async function fetchReport(){
 </script>
 
 <template>
-  <div class="min-h-screen w-full flex justify-center items-start p-6 font-sans overflow-y-auto">
-    <div class="w-full max-w-xl rounded-2xl bg-white shadow-xl ring-1 ring-slate-900/5 p-8 space-y-8 transition-all duration-300">
+  <PageShell>
+    <AppCard class="space-y-8">
       <div class="flex items-start justify-between">
         <div>
           <h1 class="text-2xl font-bold tracking-tight text-slate-900">
@@ -161,6 +162,6 @@ async function fetchReport(){
           JS-Python-Trade-Bridge v1.0 • Power by FastAPI & Vue 3
         </p>
       </div>
-    </div>
-  </div>
+      </AppCard>
+    </PageShell>
 </template>
