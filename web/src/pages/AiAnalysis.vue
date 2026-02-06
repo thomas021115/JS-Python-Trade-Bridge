@@ -4,7 +4,10 @@ import { api } from "@/services/api";
 import type { AiReportResponse } from "@/services/api";
 import { downloadMarkdown , buildReportFilename } from "@/utils/download";
 import { toast } from "vue3-toastify";
+
+// Layout shell: page background + centered container (shared across pages)
 import PageShell from "@/components/layout/PageShell.vue";
+// UI primitive: reusable card surface (rounded / shadow / padding)
 import AppCard from "@/components/ui/AppCard.vue";
 
 
