@@ -1,63 +1,17 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { api } from "@/services/api";
-import type { AiReportResponse } from "@/services/api";
-import { downloadMarkdown , buildReportFilename } from "@/utils/download";
-import { toast } from "vue3-toastify";
-
 // Layout shell: page background + centered container (shared across pages)
 import PageShell from "@/components/layout/PageShell.vue";
 // UI primitive: reusable card surface (rounded / shadow / padding)
 import AppCard from "@/components/ui/AppCard.vue";
+import { storeToRefs } from "pinia";  //https://pinia.vuejs.org/zh/core-concepts/ 解構
+import { useReport } from "@/stores/report";
 
+const s = useReport();
+const { symbol, report, loadingReport, errorMsg } = storeToRefs(s);
 
-const symbol = ref("2330");
-
-const report = ref<AiReportResponse | null>(null);
-
-const loadingReport = ref(false);
-
-const errorMsg = ref<string | null>(null);
-
-console.log("[init]", {
-  symbol: symbol.value,
-  report: report.value,
-});
-
-async function fetchReport(){
-  console.log("[door] fetchReport called");
-
-  loadingReport.value = true;
-  errorMsg.value = null;
-
-  try {
-    console.log("[before api]");
-    const res = await api.getAiReport(symbol.value);
-    console.log("[after] res" , res);
-
-    if(res.error){
-      errorMsg.value = res.error;
-      toast.error(errorMsg.value);
-      console.log("[res.error]",res.error);
-      return;
-    }
-    report.value = res;
-    console.log("[res.error]",res.report?.length);
-
-    const filename = buildReportFilename(res.code);
-    downloadMarkdown(filename, res.report ?? "");
-
-    toast.success("下載完成");
-
-  } catch (err) {
-    errorMsg.value = "抓取資料失敗 (console / Network)";
-    toast.error(errorMsg.value);
-    console.log("[catch error]", err);
-  }finally {
-    loadingReport.value = false;
-    console.log("[finally] loadingReport=false");
-  }
-};
+function fetchReport(){
+  return s.fetchreport();
+}
 
 
 </script>
