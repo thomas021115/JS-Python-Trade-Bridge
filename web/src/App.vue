@@ -35,6 +35,9 @@
 	color: #42b983;
 }
 .container {
-	padding: 2rem;
+ 	width: 100%;
+	max-width: 1900px;
+  	margin: 0 auto;
+  	padding: 2rem;
 }
 </style>
