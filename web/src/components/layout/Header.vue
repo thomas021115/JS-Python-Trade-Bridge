@@ -1,5 +1,22 @@
 <script setup lang="ts">
+import { ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { Search } from 'lucide-vue-next';
+
+const stockCode = ref('');
+const router = useRouter();
+
+const handleSearch = () => {
+	if (!stockCode.value.trim()) return;
+
+	router.push({
+		path: '/aianalysis',
+		query: {
+			stockCode: stockCode.value,
+		},
+	});
+	stockCode.value = '';
+};
 </script>
 
 <template>
@@ -13,6 +30,8 @@ import { Search } from 'lucide-vue-next';
 				/></span>
 				<input
 					type="text"
+					v-model="stockCode"
+					@keydown.enter="handleSearch"
 					class="block w-full border border-slate-300 rounded-xl pl-8 py-2 text-sm"
 					placeholder="搜尋代碼/名稱"
 				/>
