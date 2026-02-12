@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import datetime
 import time
 
+
 load_dotenv()
 
 
@@ -29,6 +30,81 @@ class ShioajiBridge:
         except Exception as e:
             print(f">>> 登入失敗: {e}")
             self.is_connected = False
+
+
+# 儀表板頁面(portfolio)
+def get_positions(self):
+
+    # 嘗試連線
+    if not self.is_connected:
+        self.login()
+        try:
+            positions=self.api.list_positions(unit=sj.constant.Unit.Share)
+            if not positions:
+                return []
+            
+            # 抓取股票資訊
+            contracts = []
+            for p in positions:
+                try:
+                    c=self.api.Contracts.Stocks[p.code]
+                    contracts.append(c)
+                except Exception:
+                    print(f"❌ 無法取得合約資料: {p.code}")
+
+            # 快速查價 (Snapshots)
+            price_map = {}
+            if contracts:
+              snapshot = self.api.snapshots(contracts)
+            for s in snapshot:
+              price_map[s.code]=s.close
+            result = []
+            for p in positions:
+                code = p.code
+                name = code # 預設名稱用代號
+                
+                # 嘗試取得中文名稱
+                if code in self.api.Contracts.Stocks:
+                    name = self.api.Contracts.Stocks[code].name
+
+                quantity = int(p.quantity) # 持股數
+                cost_price = float(p.price) # 平均成本
+                
+                # 取得現價 (如果快照沒抓到，暫時用成本價代替，避免程式崩潰)
+                current_price = price_map.get(code, cost_price)
+                
+                # === 損益計算核心 ===
+                # 市值 = 股數 * 現價
+                market_value = int(quantity * current_price)
+                # 總成本 = 股數 * 平均成本
+                total_cost = int(quantity * cost_price)
+                
+                # 未實現損益
+                pnl = market_value - total_cost
+                
+                # 報酬率 (%)
+                if total_cost != 0:
+                    pnl_rate = round((pnl / total_cost) * 100, 2)
+                else:
+                    pnl_rate = 0.0
+
+                result.append({
+                    "code": code,
+                    "name": name,
+                    "quantity": quantity,
+                    "price": cost_price,
+                    "current_price": current_price,
+                    "pnl": pnl,
+                    "pnl_rate": pnl_rate
+                })
+            
+            print(f"✅ 成功取得 {len(result)} 檔庫存損益資訊")
+            return result
+
+        except Exception as e:
+            print(f"❌ 取得庫存失敗: {e}")
+            # 出錯時回傳空陣列，避免前端掛掉
+            return []        
 
     def get_kbars(self, contract_code: str):
         # 1. 確保已連線
