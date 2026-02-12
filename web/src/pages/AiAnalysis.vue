@@ -41,7 +41,7 @@ function fetchReport(){
           {{ loadingReport ? '下載中...' : '' }}
         </span>
       </div>
-
+      <div class="space-y-6">
       <div class="space-y-4">
         <label class="block text-sm font-medium text-slate-700">股票代碼</label>
           
@@ -115,7 +115,7 @@ function fetchReport(){
           </div>
         </div>
       </div>
-
+    </div>
       <div class="border-t border-slate-100 pt-6 text-center">
         <p class="text-xs text-slate-400">
           JS-Python-Trade-Bridge v1.0 • Power by FastAPI & Vue 3
