@@ -17,7 +17,7 @@ function fetchReport(){
 </script>
 
 <template>
-  <PageShell>
+  <PageShell variant="center">
     <AppCard>
       <div class="flex items-start justify-between">
         <div>
