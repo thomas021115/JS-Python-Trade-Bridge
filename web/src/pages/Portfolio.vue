@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { ref, computed } from "vue";
 
 // 狀態控制
@@ -32,7 +32,7 @@ const positions = ref([
 ]);
 
 // 貨幣格式化
-const formatCurrency = value => {
+const formatCurrency = (value: number) => {
 	return new Intl.NumberFormat("zh-TW", {
 		style: "currency",
 		currency: "TWD",
@@ -47,6 +47,11 @@ const refreshData = () => {
 		loading.value = false;
 	}, 1000);
 };
+
+const analyzeStock = (code: string) => {
+	console.log("[analyze]", code);
+};
+
 </script>
 
 <template>
