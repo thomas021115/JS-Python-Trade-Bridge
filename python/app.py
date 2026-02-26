@@ -3,8 +3,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from shioaji_bridge import bridge
 from indicators import add_indicators_v2
 from report_generator import generate_ai_markdown
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # startup
+    print("正在啟動 Shioaji Bridge...")
+    bridge.login()
+
+    yield
+
+    # shutdown
+    try:
+        bridge.logout()
+        print("Shioaji Bridge 已登出")
+    except Exception:
+        pass
+
+
+app = FastAPI(lifespan=lifespan)
+
 
 # 允許跨域 (讓 Node.js 或瀏覽器可以呼叫)
 app.add_middleware(
@@ -13,11 +31,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("startup")
-def startup_event():
-    print("正在啟動 Shioaji Bridge...")
-    bridge.login()
 
 @app.get("/")
 def read_root():

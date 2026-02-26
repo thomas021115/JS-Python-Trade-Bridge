@@ -35,7 +35,7 @@ const positions = ref([
 ]);
 // === 假資料區域 End ===
 
-// 貨幣格式化 (台幣 $1,234)
+// 貨幣格式化
 const formatCurrency = (value: number) => {
 	return new Intl.NumberFormat('zh-TW', {
 		style: 'currency',

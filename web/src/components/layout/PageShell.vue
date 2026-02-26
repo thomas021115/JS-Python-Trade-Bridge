@@ -1,21 +1,37 @@
-<template>
-    <div class="min-h-screen w-full bg-slate-50 flex justify-center items-start" :class="outerClass">
-        <div class="w-full" :class="containerClass">
-          <slot />
-        </div>
-    </div>
-</template>
-
 <script setup lang="ts">
+import { computed } from "vue";
+
+type Variant = "center" | "wide" | "full";
+
 type Props = {
-  /** 外層額外 class*/
   outerClass?: string;
-  /** 內容容器 class*/
   containerClass?: string;
+  variant?: Variant;
 };
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   outerClass: "py-10",
-  containerClass: "px-6 w-full max-w-xl mx-auto",
+  variant: "center",
+  containerClass: "",
+});
+
+const variantClassMap: Record<Variant, string> = {
+  center: "px-6 w-full max-w-xl mx-auto",
+  wide: "px-6 w-full max-w-6xl mx-auto",
+  full: "px-6 w-full",
+};
+
+const computedContainerClass = computed(() => {
+  // 允許 containerClass 覆蓋/補充
+  return [variantClassMap[props.variant], props.containerClass].join(" ").trim();
 });
 </script>
+
+<template>
+  <div class="min-h-screen w-full bg-slate-50 flex justify-center items-start" :class="outerClass">
+    <div :class="computedContainerClass">
+      <slot />
+    </div>
+  </div>
+</template>
+

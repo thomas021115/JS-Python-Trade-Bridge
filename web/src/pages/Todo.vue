@@ -38,9 +38,34 @@ function removeTodo(id: number){
 </script>
 
 <template>
-	<div>
+	<div class="p-6 max-w-md mx-auto space-y-4">
+		<h1 class="text-xl font-bold">Todo</h1>
+		<div class="flex gap-2">
+			<input v-model="input"
+			@keydown.enter="addTodo"
+			placeholder="輸入代辦事項"
+			class="flex-1 rounded border px-3 py-2"
+			/>
+			<button
+			@click="addTodo"
+			class="px-4 py-2 rounded bg-slate-900 text-white"
+			>
+			新增
+		</button>
+		</div>
 
-		<h1>開發筆記 / Todo</h1>
-		<p>用於練習 Vue 組件化與 Pinia 狀態管理 [3]。</p>
+		<ul class="space-y-2">
+			<li v-for="todo in todos"
+			:key="todo.id"
+			class="flex item-center justify-between rounded border px-3 py-2"
+			>
+			<span>{{ todo.text }}</span>
+			<button @click="removeTodo(todo.id)"
+			class="text-sm text-red-500"
+			>
+			刪除
+			</button>
+		</li>
+		</ul>
 	</div>
 </template>
