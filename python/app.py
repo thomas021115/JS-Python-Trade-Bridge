@@ -89,3 +89,12 @@ def ai_report(code: str):
         "code": code,
         "report": md
     }
+
+# 儀表板的API
+@app.get("/api/portfolio")
+def get_portfolio():
+    positions = bridge.get_positions()
+    return{
+        "status": "success",
+        "data": positions
+    }
