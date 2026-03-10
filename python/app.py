@@ -142,10 +142,10 @@ def get_ai_payload(symbol: str):
             },
             "volume_context": {
                 "volume_today": float(latest["Volume"]),
-                "volume_prev_day": float(prev["Volume"]),
+                "volume_prev_bar": float(prev["Volume"]),
                 "volume_ma5": float(latest["VOL_MA5"]),
                 "volume_ma20": float(latest["VOL_MA20"]),
-                "volume_vs_prev_day": safe_ratio(latest["Volume"], prev["Volume"]),
+                "volume_vs_prev_bar": safe_ratio(latest["Volume"], prev["Volume"]),
                 "volume_vs_ma5": safe_ratio(latest["Volume"], latest["VOL_MA5"]),
                 "volume_vs_ma20": safe_ratio(latest["Volume"], latest["VOL_MA20"]),
             },
@@ -158,11 +158,11 @@ def get_ai_payload(symbol: str):
                 "resist_3": float(latest["RESIST_3"]),
             },
             "changes": {
-                "change_1d": round(float(latest["Close"] - prev["Close"]), 2),
-                "change_1d_pct": round(((float(latest["Close"]) - float(prev["Close"])) / float(prev["Close"])) * 100, 2) if float(prev["Close"]) != 0 else 0.0,
-                "change_3d_pct": pct_change_n(df["Close"], 3),
-                "change_5d_pct": pct_change_n(df["Close"], 5),
-                "change_20d_pct": pct_change_n(df["Close"], 20),
+                "change_1bar": round(float(latest["Close"] - prev["Close"]), 2),
+                "change_1bar_pct": round(((float(latest["Close"]) - float(prev["Close"])) / float(prev["Close"])) * 100, 2) if float(prev["Close"]) != 0 else 0.0,
+                "change_3bar_pct": pct_change_n(df["Close"], 3),
+                "change_5bar_pct": pct_change_n(df["Close"], 5),
+                "change_20bar_pct": pct_change_n(df["Close"], 20),
             },
             "recent_rows": df.tail(20)[["ts", "Open", "High", "Low", "Close", "Volume"]]
                 .rename(columns={

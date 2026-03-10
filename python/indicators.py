@@ -108,13 +108,13 @@ def _pivot_levels(df: pd.DataFrame, left: int = 3, right: int = 3):
 
 def _nearest_resistances(price: float, levels: list[float], top_n: int = 3):
     valid = sorted(
-        set(float(x) for x in levels if np.isfinite(x) and float(x) >= price)
+        set(float(x) for x in levels if np.isfinite(x) and float(x) > price)
     )
     return valid[:top_n]
 
 def _nearest_supports(price: float, levels: list[float], top_n: int = 3):
     valid = sorted(
-        set(float(x) for x in levels if np.isfinite(x) and float(x) <= price),
+        set(float(x) for x in levels if np.isfinite(x) and float(x) < price),
         reverse=True
     )
     return valid[:top_n]
