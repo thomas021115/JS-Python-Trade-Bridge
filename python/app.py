@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shioaji_bridge import bridge
-from indicators import add_indicators_v2
+from indicators import add_indicators_v2, pct_change_n
 from report_generator import generate_ai_markdown
 from contextlib import asynccontextmanager
 
@@ -71,7 +71,7 @@ def ai_briefing(code: str):
 
     # 如果 cols 還是空，就直接回傳目前 df2 的欄位讓你看
     if not cols:
-        return {"error": "欄位對不起來", "code": code, "columns": df2.columns.tolist(), "shape": list(df2.shape)}
+        return {"error": "column_mismatch", "code": code, "columns": df2.columns.tolist(), "shape": list(df2.shape)}
 
     rows = df2[cols].tail(5).to_dict(orient="records")
     return {"code": code, "rows": rows}
@@ -80,7 +80,7 @@ def ai_briefing(code: str):
 def ai_report(code: str):
     df = bridge.get_kbars(code)
     if df is None:
-        return {"error": "沒資料", "code": code}
+        return {"error": "no_data", "code": code}
 
     df = add_indicators_v2(df)
     md = generate_ai_markdown(code, df)
@@ -96,26 +96,19 @@ def get_ai_payload(symbol: str):
         df = bridge.get_kbars(symbol)
         if df is None or df.empty:
             return {"error": "no_data", "symbol": symbol}
+        
+        df = df.copy()
+
+        if "ts" not in df.columns and "t" in df.columns:
+            df = df.rename(columns={"t": "ts"})
 
         df = add_indicators_v2(df)
-
-        # 補長天期均線
-        df["MA60"] = df["Close"].rolling(60).mean()
-        df["MA120"] = df["Close"].rolling(120).mean()
-        df.fillna(0, inplace=True)
 
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else latest
 
         def safe_ratio(a, b):
             return round(float(a) / float(b), 4) if float(b) != 0 else 0.0
-
-        def pct_change_n(n: int):
-            if len(df) <= n:
-                return 0.0
-            current = float(df["Close"].iloc[-1])
-            past = float(df["Close"].iloc[-1 - n])
-            return round((current - past) / past * 100, 2) if past != 0 else 0.0
 
         payload = {
             "symbol": symbol,

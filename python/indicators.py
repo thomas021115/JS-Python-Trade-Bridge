@@ -106,15 +106,18 @@ def _pivot_levels(df: pd.DataFrame, left: int = 3, right: int = 3):
 
     return pivot_highs, pivot_lows
 
-def _nearest_levels(price: float, levels: list[float], top_n: int = 3):
-    """
-    取離目前 price 最近的幾個 level（簡單距離排序）
-    """
-    if not levels:
-        return []
-    levels = list(set([float(x) for x in levels if np.isfinite(x)]))
-    levels.sort(key=lambda x: abs(x - price))
-    return levels[:top_n]
+def _nearest_resistances(price: float, levels: list[float], top_n: int = 3):
+    valid = sorted(
+        set(float(x) for x in levels if np.isfinite(x) and float(x) >= price)
+    )
+    return valid[:top_n]
+
+def _nearest_supports(price: float, levels: list[float], top_n: int = 3):
+    valid = sorted(
+        set(float(x) for x in levels if np.isfinite(x) and float(x) <= price),
+        reverse=True
+    )
+    return valid[:top_n]
 
 # -------------------------
 # 主入口：一次加完你要的所有指標
@@ -159,8 +162,8 @@ def add_indicators_v2(df: pd.DataFrame) -> pd.DataFrame:
     pivot_highs, pivot_lows = _pivot_levels(df_recent, left=3, right=3)
     last_close = float(df["Close"].iloc[-1]) if len(df) else 0.0
 
-    resistances = _nearest_levels(last_close, pivot_highs, top_n=3)
-    supports = _nearest_levels(last_close, pivot_lows, top_n=3)
+    resistances = _nearest_resistances(last_close, pivot_highs, top_n=3)
+    supports = _nearest_supports(last_close, pivot_lows, top_n=3)
 
     # 塞進欄位（每一列都相同，方便前端直接顯示）
     df["RESIST_1"] = resistances[0] if len(resistances) > 0 else 0
