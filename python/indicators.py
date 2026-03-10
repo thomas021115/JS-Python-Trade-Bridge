@@ -133,6 +133,9 @@ def add_indicators_v2(df: pd.DataFrame) -> pd.DataFrame:
     df["EMA12"] = df["Close"].ewm(span=12, adjust=False).mean()
     df["EMA26"] = df["Close"].ewm(span=26, adjust=False).mean()
 
+    df["MA60"] = df["Close"].rolling(60).mean()
+    df["MA120"] = df["Close"].rolling(120).mean()
+
     # === 趨勢：MACD ===
     df["MACD"], df["MACD_SIGNAL"], df["MACD_HIST"] = calculate_macd(df["Close"])
 
