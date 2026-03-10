@@ -43,7 +43,7 @@ def get_kline_data(symbol: str):
     try:
         df = bridge.get_kbars(symbol)
         if df is None:
-            return {"error": "沒資料", "symbol": symbol}
+            return {"error": "no_data", "symbol": symbol}
 
         df_analyzed = add_indicators_v2(df)
         return df_analyzed.tail(100).to_dict(orient="records")
@@ -56,7 +56,7 @@ def get_kline_data(symbol: str):
 def ai_briefing(code: str):
     df = bridge.get_kbars(code)
     if df is None:
-        return {"error": "沒資料", "code": code}
+        return {"error": "no_data", "code": code}
 
     # 先把欄位統一成小寫，避免 Open/open 這種問題
     df2 = df.copy()
@@ -160,9 +160,9 @@ def get_ai_payload(symbol: str):
             "changes": {
                 "change_1d": round(float(latest["Close"] - prev["Close"]), 2),
                 "change_1d_pct": round(((float(latest["Close"]) - float(prev["Close"])) / float(prev["Close"])) * 100, 2) if float(prev["Close"]) != 0 else 0.0,
-                "change_3d_pct": pct_change_n(3),
-                "change_5d_pct": pct_change_n(5),
-                "change_20d_pct": pct_change_n(20),
+                "change_3d_pct": pct_change_n(df["Close"], 3),
+                "change_5d_pct": pct_change_n(df["Close"], 5),
+                "change_20d_pct": pct_change_n(df["Close"], 20),
             },
             "recent_rows": df.tail(20)[["ts", "Open", "High", "Low", "Close", "Volume"]]
                 .rename(columns={
