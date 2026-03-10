@@ -174,3 +174,12 @@ def add_indicators_v2(df: pd.DataFrame) -> pd.DataFrame:
     # 最後補空值（前面 rolling 會產生 NaN）
     df.fillna(0, inplace=True)
     return df
+
+def pct_change_n(series: pd.Series, n: int) -> float:
+    if len(series) <= n:
+        return 0.0
+    current = float(series.iloc[-1])
+    past = float(series.iloc[-1 - n])
+    if past == 0:
+        return 0.0
+    return round((current - past) / past * 100, 2)

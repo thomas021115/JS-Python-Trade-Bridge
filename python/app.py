@@ -89,3 +89,100 @@ def ai_report(code: str):
         "code": code,
         "report": md
     }
+
+@app.get("/api/ai-payload/{symbol}")
+def get_ai_payload(symbol: str):
+    try:
+        df = bridge.get_kbars(symbol)
+        if df is None or df.empty:
+            return {"error": "no_data", "symbol": symbol}
+
+        df = add_indicators_v2(df)
+
+        # 補長天期均線
+        df["MA60"] = df["Close"].rolling(60).mean()
+        df["MA120"] = df["Close"].rolling(120).mean()
+        df.fillna(0, inplace=True)
+
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) > 1 else latest
+
+        def safe_ratio(a, b):
+            return round(float(a) / float(b), 4) if float(b) != 0 else 0.0
+
+        def pct_change_n(n: int):
+            if len(df) <= n:
+                return 0.0
+            current = float(df["Close"].iloc[-1])
+            past = float(df["Close"].iloc[-1 - n])
+            return round((current - past) / past * 100, 2) if past != 0 else 0.0
+
+        payload = {
+            "symbol": symbol,
+            "as_of": str(latest["ts"]),
+            "latest": {
+                "open": float(latest["Open"]),
+                "high": float(latest["High"]),
+                "low": float(latest["Low"]),
+                "close": float(latest["Close"]),
+                "volume": float(latest["Volume"]),
+            },
+            "indicators": {
+                "ma5": float(latest["MA5"]),
+                "ma20": float(latest["MA20"]),
+                "ma60": float(latest["MA60"]),
+                "ma120": float(latest["MA120"]),
+                "ema12": float(latest["EMA12"]),
+                "ema26": float(latest["EMA26"]),
+                "rsi14": float(latest["RSI"]),
+                "macd": float(latest["MACD"]),
+                "macd_signal": float(latest["MACD_SIGNAL"]),
+                "macd_hist": float(latest["MACD_HIST"]),
+                "k": float(latest["K"]),
+                "d": float(latest["D"]),
+                "cci20": float(latest["CCI"]),
+                "atr14": float(latest["ATR14"]),
+                "bb_mid": float(latest["BB_MID"]),
+                "bb_upper": float(latest["BB_UPPER"]),
+                "bb_lower": float(latest["BB_LOWER"]),
+                "bb_width": float(latest["BB_WIDTH"]),
+            },
+            "volume_context": {
+                "volume_today": float(latest["Volume"]),
+                "volume_prev_day": float(prev["Volume"]),
+                "volume_ma5": float(latest["VOL_MA5"]),
+                "volume_ma20": float(latest["VOL_MA20"]),
+                "volume_vs_prev_day": safe_ratio(latest["Volume"], prev["Volume"]),
+                "volume_vs_ma5": safe_ratio(latest["Volume"], latest["VOL_MA5"]),
+                "volume_vs_ma20": safe_ratio(latest["Volume"], latest["VOL_MA20"]),
+            },
+            "levels": {
+                "support_1": float(latest["SUPPORT_1"]),
+                "support_2": float(latest["SUPPORT_2"]),
+                "support_3": float(latest["SUPPORT_3"]),
+                "resist_1": float(latest["RESIST_1"]),
+                "resist_2": float(latest["RESIST_2"]),
+                "resist_3": float(latest["RESIST_3"]),
+            },
+            "changes": {
+                "change_1d": round(float(latest["Close"] - prev["Close"]), 2),
+                "change_1d_pct": round(((float(latest["Close"]) - float(prev["Close"])) / float(prev["Close"])) * 100, 2) if float(prev["Close"]) != 0 else 0.0,
+                "change_3d_pct": pct_change_n(3),
+                "change_5d_pct": pct_change_n(5),
+                "change_20d_pct": pct_change_n(20),
+            },
+            "recent_rows": df.tail(20)[["ts", "Open", "High", "Low", "Close", "Volume"]]
+                .rename(columns={
+                    "Open": "open",
+                    "High": "high",
+                    "Low": "low",
+                    "Close": "close",
+                    "Volume": "volume",
+                })
+                .to_dict(orient="records"),
+        }
+
+        return payload
+
+    except Exception as e:
+        return {"error": str(e), "symbol": symbol}
