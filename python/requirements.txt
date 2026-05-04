@@ -4,3 +4,6 @@ shioaji
 pandas
 python-dotenv
 pydantic
+sqlalchemy
+pymysql
+alembic
