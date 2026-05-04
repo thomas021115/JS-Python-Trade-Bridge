@@ -4,6 +4,8 @@ from shioaji_bridge import bridge
 from indicators import add_indicators_v2, pct_change_n
 from report_generator import generate_ai_markdown
 from contextlib import asynccontextmanager
+from database import SessionLocal
+from db_repository import save_stock, save_daily_price, save_technical_snapshot,save_ai_report
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -78,17 +80,43 @@ def ai_briefing(code: str):
 
 @app.get("/api/ai-report/{code}")
 def ai_report(code: str):
-    df = bridge.get_kbars(code)
-    if df is None:
-        return {"error": "no_data", "code": code}
+    code = code.strip()
+    db = SessionLocal()
 
-    df = add_indicators_v2(df)
-    md = generate_ai_markdown(code, df)
+    try:
+        df = bridge.get_kbars(code)
 
-    return {
-        "code": code,
-        "report": md
-    }
+        if df is None or df.empty:
+            return {"error": "no_data", "code": code}
+
+        df = add_indicators_v2(df)
+        md = generate_ai_markdown(code, df)
+
+        save_stock(db, symbol=code)
+        save_daily_price(db, code, df)
+        save_technical_snapshot(db, code, df)
+        save_ai_report(db, code, md)
+
+        db.commit()
+
+        return {
+            "code": code,
+            "report": md,
+            "saved": True
+        }
+
+    except Exception as e:
+        db.rollback()
+        print("產生戰報失敗:", e)
+
+        return {
+            "code": code,
+            "error": str(e),
+            "saved": False
+        }
+
+    finally:
+        db.close()
 
 @app.get("/api/ai-payload/{symbol}")
 def get_ai_payload(symbol: str):
@@ -179,3 +207,47 @@ def get_ai_payload(symbol: str):
 
     except Exception as e:
         return {"error": str(e), "symbol": symbol}
+    
+@app.post("/api/sync/{symbol}")
+def sync_stock_data(symbol: str):
+    symbol = symbol.strip()
+    print(f"開始同步 {symbol} 到 MySQL...")
+
+    db = SessionLocal()
+
+    try:
+        df = bridge.get_kbars(symbol)
+
+        if df is None or df.empty:
+            return {
+                "success": False,
+                "symbol": symbol,
+                "error": "no_data"
+            }
+
+        df_analyzed = add_indicators_v2(df)
+
+        save_stock(db, symbol=symbol)
+        daily_count = save_daily_price(db, symbol, df_analyzed)
+        snapshot_count = save_technical_snapshot(db, symbol, df_analyzed)
+
+        db.commit()
+
+        return {
+            "success": True,
+            "symbol": symbol,
+            "daily_price_saved": daily_count,
+            "technical_snapshot_saved": snapshot_count
+        }
+
+    except Exception as e:
+        db.rollback()
+
+        return {
+            "success": False,
+            "symbol": symbol,
+            "error": str(e)
+        }
+
+    finally:
+        db.close()
