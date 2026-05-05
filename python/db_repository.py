@@ -1,4 +1,6 @@
 from sqlalchemy import text
+from datetime import datetime, timedelta
+from sqlalchemy import text
 
 def save_ai_report(db, symbol: str, report_markdown: str):
     sql = text("""
@@ -205,3 +207,43 @@ def save_technical_snapshot(db, symbol: str, df):
         count += 1
 
     return count
+
+def get_recent_daily_price(db, symbol: str, days: int = 7):
+    start_time = datetime.now() - timedelta(days=days)
+
+    sql = text("""
+        SELECT
+            symbol,
+            ts,
+            open_price,
+            high_price,
+            low_price,
+            close_price,
+            volume
+        FROM daily_price
+        WHERE symbol = :symbol
+          AND ts >= :start_time
+        ORDER BY ts ASC
+    """)
+
+    result = db.execute(sql, {
+        "symbol": symbol,
+        "start_time": start_time
+    })
+
+    rows = []
+
+    for row in result:
+        data = dict(row._mapping)
+
+        rows.append({
+            "symbol": data["symbol"],
+            "ts": data["ts"].isoformat(),
+            "open": float(data["open_price"]),
+            "high": float(data["high_price"]),
+            "low": float(data["low_price"]),
+            "close": float(data["close_price"]),
+            "volume": int(data["volume"]),
+        })
+
+    return rows

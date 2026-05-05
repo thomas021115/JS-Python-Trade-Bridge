@@ -5,7 +5,7 @@ from indicators import add_indicators_v2, pct_change_n
 from report_generator import generate_ai_markdown
 from contextlib import asynccontextmanager
 from database import SessionLocal
-from db_repository import save_stock, save_daily_price, save_technical_snapshot,save_ai_report
+from db_repository import save_stock, save_daily_price, save_technical_snapshot,save_ai_report, get_recent_daily_price
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -251,3 +251,34 @@ def sync_stock_data(symbol: str):
 
     finally:
         db.close()
+
+@app.get("/api/db/kline/{symbol}")
+def get_kline_from_db(symbol: str, days: int = 7):
+    symbol = symbol.strip()
+
+    db = SessionLocal()
+
+    try:
+        rows = get_recent_daily_price(db, symbol, days)
+
+        return {
+            "success": True,
+            "symbol": symbol,
+            "source": "database",
+            "days": days,
+            "count": len(rows),
+            "rows": rows
+        }
+
+    except Exception as e:
+        print("從資料庫讀取 K 線失敗:", e)
+
+        return {
+            "success": False,
+            "symbol": symbol,
+            "source": "database",
+            "error": str(e)
+        }
+
+    finally:
+        db.close()  
