@@ -30,7 +30,7 @@ class ShioajiBridge:
             print(f">>> 登入失敗: {e}")
             self.is_connected = False
 
-    def get_kbars(self, contract_code: str):
+    def get_kbars(self, contract_code: str, start: str | None = None, end: str | None = None):
         # 1. 確保已連線
         if not self.is_connected:
             self.login()
@@ -46,15 +46,23 @@ class ShioajiBridge:
                 time.sleep(1)
         
         if contract is None:
-            print(f"❌ 錯誤: 找不到合約 {contract_code}，可能是合約下載未完成")
+            print(f"錯誤: 找不到合約 {contract_code}，可能是合約下載未完成")
             return None
 
-        print(f"✅ 取得合約: {contract.name} ({contract.code})")
+        print(f" 取得合約: {contract.name} ({contract.code})")
 
         # 3. 擴大日期範圍 (抓 30 天，確保避開連假或沒資料的日子)
         today = datetime.date.today()
-        start_date = (today - datetime.timedelta(days=30)).isoformat()
-        end_date = (today + datetime.timedelta(days=1)).isoformat()
+
+        if start is None:
+            start_date = (today - datetime.timedelta(days=30)).isoformat()
+        else:
+            start_date = start
+
+        if end is None:
+            end_date = (today + datetime.timedelta(days=1)).isoformat()
+        else:
+            end_date = end
 
         print(f"🔍 正在抓取範圍: {start_date} ~ {end_date}")
 

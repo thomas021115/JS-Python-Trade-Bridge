@@ -5,7 +5,7 @@ from indicators import add_indicators_v2, pct_change_n
 from report_generator import generate_ai_markdown
 from contextlib import asynccontextmanager
 from database import SessionLocal
-from db_repository import save_stock, save_daily_price, save_technical_snapshot,save_ai_report, get_recent_daily_price
+from db_repository import save_stock, save_daily_price, save_technical_snapshot,save_ai_report, get_recent_daily_price,get_daily_price_between
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -282,3 +282,44 @@ def get_kline_from_db(symbol: str, days: int = 7):
 
     finally:
         db.close()  
+        
+@app.get("/api/test/db-kline/{symbol}")
+def test_db_kline(symbol: str, start: str, end: str):
+    db = SessionLocal()
+
+    try:
+        rows = get_daily_price_between(db, symbol, start, end)
+
+        return {
+            "success": True,
+            "symbol": symbol,
+            "start": start,
+            "end": end,
+            "count": len(rows),
+            "first_ts": str(rows[0]["ts"]) if rows else None,
+            "last_ts": str(rows[-1]["ts"]) if rows else None,
+        }
+
+    finally:
+        db.close()
+        
+@app.get("/api/test/kbars/{symbol}")
+def test_kbars(symbol: str, start: str, end: str):
+    df = bridge.get_kbars(symbol, start=start, end=end)
+
+    if df is None or df.empty:
+        return {
+            "success": False,
+            "symbol": symbol,
+            "error": "no_data"
+        }
+
+    return {
+        "success": True,
+        "symbol": symbol,
+        "start": start,
+        "end": end,
+        "count": len(df),
+        "first_ts": str(df.iloc[0]["ts"]),
+        "last_ts": str(df.iloc[-1]["ts"]),
+    }

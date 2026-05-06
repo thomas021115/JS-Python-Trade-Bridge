@@ -247,3 +247,33 @@ def get_recent_daily_price(db, symbol: str, days: int = 7):
         })
 
     return rows
+
+def get_daily_price_between(db, symbol: str, start_time, end_time):
+    sql = text("""
+        SELECT
+            symbol,
+            ts,
+            open_price,
+            high_price,
+            low_price,
+            close_price,
+            volume
+        FROM daily_price
+        WHERE symbol = :symbol
+          AND ts >= :start_time
+          AND ts <= :end_time
+        ORDER BY ts ASC
+    """)
+
+    result = db.execute(sql, {
+        "symbol": symbol,
+        "start_time": start_time,
+        "end_time": end_time,
+    })
+
+    rows = []
+
+    for row in result:
+        rows.append(dict(row._mapping))
+
+    return rows
