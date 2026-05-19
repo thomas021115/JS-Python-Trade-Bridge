@@ -1,5 +1,31 @@
-# Vue 3 + TypeScript + Vite
+# Web Client (Vue 3 + TypeScript + Vite)
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+This folder contains the frontend for JS-Python-Trade-Bridge.
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+## Purpose
+- Consume FastAPI endpoints from `../python/app.py`
+- Render market data, report output, and analysis pages
+- Provide a lightweight UI for demo/UAT workflows
+
+## Development
+
+```bash
+npm install
+npm run dev
+```
+
+## Build
+
+```bash
+npm run build
+npm run preview
+```
+
+## Environment Notes
+- Ensure backend is running (default: `http://127.0.0.1:8000`).
+- Configure API base URL in frontend service config as needed.
+
+## Suggested Next Steps
+- Add environment-based API URL management.
+- Add API error-state handling and retry UX.
+- Add component/unit tests for key pages.

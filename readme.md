@@ -1,42 +1,148 @@
-# JS-Python-Trade-Bridge  
-> A Full-Stack Trading Data Bridge using **Python Shioaji** + **FastAPI** + **Node.js**  
-> 提供 Shioaji 正式 API 的金融資料，給 JavaScript / Node.js 使用。
+# JS-Python-Trade-Bridge
+
+> A production-oriented bridge that exposes **Shioaji (Python-only)** market data to JavaScript apps via **FastAPI**.
 
 ---
 
-##  專案介紹
+## 1) Project Goal
 
-永豐金 Shioaji API **只有 Python 版本**，JavaScript/Node.js 無法直接登入、抓 K 線、或訂閱行情。  
-本專案解決這個問題：
+Shioaji only provides a Python SDK. This project makes that data available to:
+- Web frontends (Vue/React/Next.js)
+- Node.js backend services
+- Internal quant tooling that prefers HTTP-based integration
 
-###  使用 Python（Shioaji）登入正式 API  
-###  使用 FastAPI 建立本地 API Server  
-###  JavaScript/Node.js 可以用 fetch / axios 直接取得金融資料  
-###  支援：K 線、Tick、五檔、商品資訊、委託測試  
-
-這是一個 **JS 與 Python 的金融資料橋接器（Bridge）**，  
-讓 JS 前後端可以使用永豐金的正式金融資料。
-
----
-
-##  功能 (Features)
-
-Python Shioaji 正式 API 連線 | 使用 simulation=False + signed=True |
-抓取日 K / 1 分 K / 5 分 K | 提供 JavaScript 可用的 JSON 格式 |
-即時 Tick 訂閱 | 由 Python 推送 |
-五檔委託簿（Order Book） | 提供市場深度資料 |
-FastAPI REST API | Node.js 可直接呼叫 |
-支援多股票查詢 | 可用 query string 控制 |
-後續可擴充寫入資料庫 | MySQL / PostgreSQL / MongoDB |
+Core idea:
+1. Python connects to Shioaji.
+2. FastAPI serves normalized REST responses.
+3. JS/TS clients consume data via HTTP.
 
 ---
 
-## 🏗 系統架構 (Architecture)
+## 2) Current Scope (Deliverable Baseline)
 
-以下為本專案的資料流：
+- K-bar retrieval
+- Technical indicator enrichment
+- AI payload/report endpoints
+- Data sync to MySQL
+- Query from database snapshots
 
-```mermaid
-flowchart LR
-    A[Shioaji API<br/>Python] -->|K線 / Tick / 五檔| B[FastAPI Server]
-    B -->|HTTP REST| C[Node.js / Next.js 前端]
-    C -->|顯示圖表 / 分析| D[使用者介面]
+This baseline is intended to be **stable enough for handoff/demo/UAT**, and can be refactored iteratively for deeper maintainability.
+
+---
+
+## 3) Repository Structure
+
+```text
+.
+├─ python/
+│  ├─ app.py                # FastAPI entrypoint
+│  ├─ shioaji_bridge.py     # Shioaji login/data fetch bridge
+│  ├─ indicators.py         # Technical indicator calculations
+│  ├─ db_repository.py      # SQL persistence/read helpers
+│  ├─ database.py           # SQLAlchemy engine/session
+│  ├─ models.py             # DB model definitions (if used)
+│  ├─ report_generator.py   # AI markdown report generation
+│  └─ requirements.txt
+├─ web/
+│  ├─ src/
+│  └─ package.json
+└─ readme.md
+```
+
+---
+
+## 4) Backend Quick Start (Python/FastAPI)
+
+### Prerequisites
+- Python 3.10+
+- MySQL 8+
+- Valid Shioaji credentials/cert setup
+
+### Install
+
+```bash
+cd python
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Environment Variables
+
+Create `python/.env` (example):
+
+```env
+DB_USER=root
+DB_PASSWORD=
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=trade_bridge
+```
+
+> Add your Shioaji auth-related env vars/settings based on your local security setup.
+
+### Run API
+
+```bash
+cd python
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8000/
+```
+
+---
+
+## 5) Frontend Quick Start (Vue)
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Default dev URL: `http://127.0.0.1:5173`
+
+---
+
+## 6) API Snapshot (Baseline)
+
+- `GET /` : service health
+- `GET /api/kline/{symbol}` : latest enriched K-line rows
+- `GET /api/ai-briefing/{code}` : compact AI briefing rows
+- `GET /api/ai-report/{code}` : generated markdown report + DB save
+- `GET /api/ai-payload/{symbol}` : structured indicator payload
+- `POST /api/sync/{symbol}` : sync market+indicator data to DB
+- `GET /api/db/kline/{symbol}?days=7` : read recent K-lines from DB
+- `GET /api/test/db-kline/{symbol}?start=...&end=...` : DB range test
+- `GET /api/test/kbars/{symbol}?start=...&end=...` : remote source test
+
+---
+
+## 7) Delivery Notes (for Formal Handoff)
+
+For a formal deliverable package, ensure:
+- `.env` is provided via secure channel (never commit secrets).
+- DB schema and indexes are applied in target environment.
+- UAT checklist includes at least one real symbol end-to-end run:
+  - Source fetch
+  - Indicator generation
+  - DB sync
+  - API readback
+- API consumer contract is frozen for the current milestone.
+
+---
+
+## 8) Next Iteration (Maintainability Upgrade Plan)
+
+Recommended incremental improvements (without breaking contract):
+1. Split `app.py` into routers/services.
+2. Add Pydantic request/response models.
+3. Standardize error response format and HTTP status usage.
+4. Add unit/integration tests with pytest.
+5. Add CI for lint/test and migration checks.
+
+This keeps current delivery usable, while reducing future maintenance cost.
