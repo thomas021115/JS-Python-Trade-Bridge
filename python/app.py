@@ -38,6 +38,26 @@ app.add_middleware(
 def read_root():
     return {"status": "ok", "message": "JS-Python-Trade-Bridge is Running!"}
 
+@app.get("/api/account/stock-positions")
+def get_account_stock_positions():
+    try:
+        rows = bridge.get_stock_positions()
+
+        return {
+            "success": True,
+            "source": "shioaji",
+            "count": len(rows),
+            "symbols": [row["code"] for row in rows],
+            "positions": rows,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "source": "shioaji",
+            "error": str(e),
+        }
+
 @app.get("/api/kline/{symbol}")
 def get_kline_data(symbol: str):
     print(f"正在抓取 {symbol} 資料...")

@@ -43,6 +43,30 @@ export interface AiReportResponse {
     error?: string;
 }
 
+export interface StockPosition {
+    id: number;
+    code: string;
+    name?: string | null;
+    direction?: string | null;
+    quantity: number;
+    yd_quantity: number;
+    price: number;
+    last_price: number;
+    pnl: number;
+    pnl_rate: number;
+    market_value: number;
+    cond?: string | null;
+}
+
+export interface StockPositionsResponse {
+    success: boolean;
+    source: 'shioaji';
+    count?: number;
+    symbols?: string[];
+    positions?: StockPosition[];
+    error?: string;
+}
+
 // 獲取python裡的輸出
 export const api = {
     getKline: (symbol: string) => {
@@ -53,6 +77,9 @@ export const api = {
     },
     getAiReport: (code: string) => {
         return http.get<any, AiReportResponse>(`/api/ai-report/${code}`);
+    },
+    getStockPositions: () => {
+        return http.get<any, StockPositionsResponse>('/api/account/stock-positions');
     }
 
 };

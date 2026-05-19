@@ -1,37 +1,27 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { api, type StockPosition } from "@/services/api";
 
-// 狀態控制
 const loading = ref(false);
+const errorMsg = ref<string | null>(null);
+const positions = ref<StockPosition[]>([]);
+const symbols = ref<string[]>([]);
+const activeTab = ref<"positions" | "accounting">("positions");
 
-const totalAssets = ref(1250000);
-const totalUnrealized = ref(45800);
-const totalReturnRate = ref(3.65);
-const realizedDay = ref(1200);
-const activeTab = ref("positions"); // 'positions' | 'accounting'
+const positionCount = computed(() => positions.value.length);
+const totalMarketValue = computed(() =>
+	positions.value.reduce((sum, pos) => sum + pos.market_value, 0),
+);
+const totalUnrealized = computed(() =>
+	positions.value.reduce((sum, pos) => sum + pos.pnl, 0),
+);
+const totalCost = computed(() =>
+	positions.value.reduce((sum, pos) => sum + pos.quantity * pos.price, 0),
+);
+const totalReturnRate = computed(() =>
+	totalCost.value ? (totalUnrealized.value / totalCost.value) * 100 : 0,
+);
 
-const positions = ref([
-	{
-		code: "2330",
-		name: "台積電",
-		quantity: 2000, // 股數
-		price: 580.5, // 平均成本
-		current_price: 1030, // 目前市價
-		pnl: 899000, // 未實現損益
-		pnl_rate: 77.43, // 報酬率 (%)
-	},
-	{
-		code: "2603",
-		name: "長榮",
-		quantity: 5000,
-		price: 185.0,
-		current_price: 170.5,
-		pnl: -72500,
-		pnl_rate: -7.83,
-	},
-]);
-
-// 貨幣格式化
 const formatCurrency = (value: number) => {
 	return new Intl.NumberFormat("zh-TW", {
 		style: "currency",
@@ -40,169 +30,176 @@ const formatCurrency = (value: number) => {
 	}).format(value);
 };
 
-// 手動更新
-const refreshData = () => {
+const formatNumber = (value: number) => {
+	return new Intl.NumberFormat("zh-TW").format(value);
+};
+
+const formatPercent = (value: number) => {
+	return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+};
+
+const refreshData = async () => {
 	loading.value = true;
-	setTimeout(() => {
+	errorMsg.value = null;
+
+	try {
+		const res = await api.getStockPositions();
+
+		if (!res.success) {
+			errorMsg.value = res.error || "讀取 Shioaji 庫存失敗";
+			positions.value = [];
+			symbols.value = [];
+			return;
+		}
+
+		positions.value = res.positions ?? [];
+		symbols.value = res.symbols ?? positions.value.map((pos) => pos.code);
+	} catch (err) {
+		console.error("[portfolio.refresh]", err);
+		errorMsg.value = "無法連線到後端 API，請確認 FastAPI 已啟動";
+		positions.value = [];
+		symbols.value = [];
+	} finally {
 		loading.value = false;
-	}, 1000);
+	}
 };
 
 const analyzeStock = (code: string) => {
 	console.log("[analyze]", code);
 };
 
+onMounted(() => {
+	refreshData();
+});
 </script>
 
 <template>
-	<div class="min-h-screen bg-slate-900 text-slate-100 p-6">
-		<!-- 頂部標題 -->
-		<div>
-			<h1 class="text-2xl font-bold">股票帳務</h1>
-			<p class="text-slate-400 text-sm">現貨資產狀態</p>
-		</div>
+	<main class="min-h-screen bg-slate-950 text-slate-100">
+		<section class="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+			<header class="flex flex-col gap-4 border-b border-slate-800 pb-5 md:flex-row md:items-end md:justify-between">
+				<div>
+					<h1 class="text-2xl font-bold tracking-tight">Shioaji 帳戶庫存</h1>
+					<p class="mt-2 text-sm text-slate-400">
+						目前持有 {{ positionCount }} 檔股票
+					</p>
+				</div>
 
-		<button
-			@click="refreshData"
-			class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors disabled:opacity-50"
-			:disabled="loading"
-		>
-			<span v-if="loading">讀取中...</span>
-			<span v-else>刷新報價</span>
-		</button>
-	</div>
-	<!-- 頂部 -->
-	<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-		<!-- 總權益數 -->
-		<div class="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
-			<h3 class="text-slate-400 text-sm mb-2">總權益數 (Est.)</h3>
-			<div class="text-mono font-bold text-white">
-				{{ formatCurrency(totalAssets) }}
-			</div>
-		</div>
-		<!-- 未實現損益 -->
-		<div class="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
-			<h3 class="">未實現損益</h3>
-			<div
-				class="text-2xl font-mono font-bold"
-				:class="totalUnrealized >= 0 ? 'text-red-500' : 'text-green-500'"
-			>
-				{{ totalUnrealized >= 0 ? "+" : ""
-				}}{{ formatCurrency(totalUnrealized) }}
-				<span>{{ totalReturnRate }}%</span>
-			</div>
-		</div>
-
-		<!-- 今日已實現 -->
-		<div class="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
-			<h3 class="text-slate-400 text-sm mb-2">今日已實現</h3>
-			<div
-				class="text-2xl font-mono font-bold"
-				:class="realizedDay >= 0 ? 'text-red-400' : 'text-slate-100'"
-			>
-				{{ formatCurrency(realizedDay) }}
-			</div>
-		</div>
-	</div>
-
-	<!-- 分頁標籤 -->
-	<div
-		class="bg-slate-900 rounded-xl border border-slate-700 overflow-hidden mt-8"
-	>
-		<div class="flex border-b border-slate-700">
-			<button
-				@click="activeTab = 'positions'"
-				class="px-6 py-4 text-sm font-medium transition-colors"
-				:class="
-					activeTab === 'positions'
-						? 'text-blue-400 border-b-2 border-blue-400 bg-slate-700/50'
-						: 'text-slate-400 hover:text-white'
-				"
-			>
-				庫存部位
-			</button>
-			<button
-				@click="activeTab = 'accounting'"
-				class="px-6 py-4 text-sm font-medium transition-colors"
-				:class="
-					activeTab === 'accounting'
-						? 'text-blue-400 border-b-2 border-blue-400 bg-slate-700/50'
-						: 'text-slate-400 hover:text-white'
-				"
-			>
-				帳務明細 (Coming Soon)
-			</button>
-		</div>
-	</div>
-	<div v-if="activeTab === 'positions'" class="overflow-x-auto">
-		<table class="w-full text-left border-collapse">
-			<thead>
-				<tr class="bg-slate-700/50 text-sm">
-					<th class="p-4 font-medium">商品</th>
-					<th class="p-4 font-medium text-right">庫存</th>
-					<th class="p-4 font-medium text-right">均價 / 現價</th>
-					<th class="p-4 font-medium text-right">市值</th>
-					<th class="p-4 font-medium text-right">損益 (%)</th>
-					<th class="p-4 font-medium text-center">AI分析</th>
-				</tr>
-			</thead>
-			<tbody class="divide-y divide-slate-700 text-sm">
-				<tr
-					v-for="pos in positions"
-					:key="pos.code"
-					class="hover:bg-slate-700/30 active:bg-slate-700/50 transition-colors cursor-pointer"
+				<button
+					@click="refreshData"
+					:disabled="loading"
+					class="inline-flex items-center justify-center rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
 				>
-					<!-- 商品 -->
-					<td class="p-4">
-						<div class="font-bold text-white">{{ pos.name }}</div>
-						<div class="text-xs text-slate-500">{{ pos.code }}</div>
-					</td>
+					{{ loading ? "讀取中..." : "重新整理" }}
+				</button>
+			</header>
 
-					<!-- 庫存 -->
-					<td class="p-4 text-right font-mono text-white">
-						{{ pos.quantity }}
-					</td>
+			<div v-if="errorMsg" class="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+				{{ errorMsg }}
+			</div>
 
-					<!-- 均價 / 現價 -->
-					<td class="p-4 text-right">
-						<div class="font-mono text-white">{{ pos.current_price }}</div>
-						<div class="text-xs text-slate-500">成本: {{ pos.price }}</div>
-					</td>
+			<section class="grid grid-cols-1 gap-4 md:grid-cols-3">
+				<div class="rounded-lg border border-slate-800 bg-slate-900 p-5">
+					<div class="text-sm text-slate-400">股票檔數</div>
+					<div class="mt-2 text-3xl font-bold">{{ positionCount }}</div>
+					<div class="mt-3 text-sm text-slate-500">
+						{{ symbols.length ? symbols.join(", ") : "尚無庫存" }}
+					</div>
+				</div>
 
-					<!-- 市值 -->
-					<td class="p-4 text-right font-mono text-slate-300">
-						{{ formatCurrency(pos.quantity * pos.current_price) }}
-					</td>
+				<div class="rounded-lg border border-slate-800 bg-slate-900 p-5">
+					<div class="text-sm text-slate-400">庫存市值</div>
+					<div class="mt-2 text-3xl font-bold">{{ formatCurrency(totalMarketValue) }}</div>
+				</div>
 
-					<!-- 損益 (紅漲綠跌邏輯) -->
-					<td class="p-4 text-right font-mono font-bold">
-						<div :class="pos.pnl >= 0 ? 'text-red-500' : 'text-green-500'">
-							{{ pos.pnl >= 0 ? "+" : "" }}{{ formatCurrency(pos.pnl) }}
-						</div>
-						<div
-							:class="pos.pnl_rate >= 0 ? 'text-red-500' : 'text-green-500'"
-							class="text-xs"
-						>
-							{{ pos.pnl_rate }}%
-						</div>
-					</td>
+				<div class="rounded-lg border border-slate-800 bg-slate-900 p-5">
+					<div class="text-sm text-slate-400">未實現損益</div>
+					<div
+						class="mt-2 text-3xl font-bold"
+						:class="totalUnrealized >= 0 ? 'text-red-400' : 'text-emerald-400'"
+					>
+						{{ totalUnrealized >= 0 ? "+" : "" }}{{ formatCurrency(totalUnrealized) }}
+					</div>
+					<div
+						class="mt-2 text-sm font-medium"
+						:class="totalReturnRate >= 0 ? 'text-red-300' : 'text-emerald-300'"
+					>
+						{{ formatPercent(totalReturnRate) }}
+					</div>
+				</div>
+			</section>
 
-					<!-- 操作按鈕 -->
-					<td class="p-4 text-center">
-						<button
-							@click="analyzeStock(pos.code)"
-							class="px-3 py-1 bg-indigo-500/20 text-indigo-300 border border-indigo-500/50 rounded hover:bg-indigo-500/40 transition-colors text-xs"
-						>
-							分析走勢
-						</button>
-					</td>
-				</tr>
-			</tbody>
-		</table>
+			<section class="overflow-hidden rounded-lg border border-slate-800 bg-slate-900">
+				<div class="flex border-b border-slate-800">
+					<button
+						@click="activeTab = 'positions'"
+						class="px-5 py-3 text-sm font-medium transition"
+						:class="activeTab === 'positions' ? 'border-b-2 border-sky-400 text-sky-300' : 'text-slate-400 hover:text-slate-100'"
+					>
+						庫存明細
+					</button>
+					<button
+						@click="activeTab = 'accounting'"
+						class="px-5 py-3 text-sm font-medium transition"
+						:class="activeTab === 'accounting' ? 'border-b-2 border-sky-400 text-sky-300' : 'text-slate-400 hover:text-slate-100'"
+					>
+						帳務資訊
+					</button>
+				</div>
 
-		<!-- 無資料時的提示 -->
-		<div v-if="positions.length === 0" class="p-8 text-center text-slate-500">
-			目前沒有持倉
-		</div>
-	</div>
+				<div v-if="activeTab === 'positions'" class="overflow-x-auto">
+					<table class="w-full min-w-[900px] text-left text-sm">
+						<thead class="bg-slate-950/70 text-slate-400">
+							<tr>
+								<th class="px-4 py-3 font-medium">股票</th>
+								<th class="px-4 py-3 text-right font-medium">方向</th>
+								<th class="px-4 py-3 text-right font-medium">股數</th>
+								<th class="px-4 py-3 text-right font-medium">均價</th>
+								<th class="px-4 py-3 text-right font-medium">現價</th>
+								<th class="px-4 py-3 text-right font-medium">市值</th>
+								<th class="px-4 py-3 text-right font-medium">未實現損益</th>
+								<th class="px-4 py-3 text-center font-medium">操作</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-slate-800">
+							<tr v-for="pos in positions" :key="`${pos.code}-${pos.id}`" class="hover:bg-slate-800/50">
+								<td class="px-4 py-3">
+									<div class="font-semibold text-slate-100">{{ pos.name || pos.code }}</div>
+									<div class="text-xs text-slate-500">{{ pos.code }}</div>
+								</td>
+								<td class="px-4 py-3 text-right text-slate-300">{{ pos.direction || "-" }}</td>
+								<td class="px-4 py-3 text-right font-mono">{{ formatNumber(pos.quantity) }}</td>
+								<td class="px-4 py-3 text-right font-mono">{{ pos.price.toFixed(2) }}</td>
+								<td class="px-4 py-3 text-right font-mono">{{ pos.last_price.toFixed(2) }}</td>
+								<td class="px-4 py-3 text-right font-mono">{{ formatCurrency(pos.market_value) }}</td>
+								<td class="px-4 py-3 text-right font-mono">
+									<div :class="pos.pnl >= 0 ? 'text-red-400' : 'text-emerald-400'">
+										{{ pos.pnl >= 0 ? "+" : "" }}{{ formatCurrency(pos.pnl) }}
+									</div>
+									<div class="text-xs" :class="pos.pnl_rate >= 0 ? 'text-red-300' : 'text-emerald-300'">
+										{{ formatPercent(pos.pnl_rate) }}
+									</div>
+								</td>
+								<td class="px-4 py-3 text-center">
+									<button
+										@click="analyzeStock(pos.code)"
+										class="rounded-md border border-sky-400/40 px-3 py-1 text-xs font-medium text-sky-300 transition hover:bg-sky-400/10"
+									>
+										AI 分析
+									</button>
+								</td>
+							</tr>
+						</tbody>
+					</table>
+
+					<div v-if="!loading && positions.length === 0" class="px-4 py-10 text-center text-sm text-slate-500">
+						目前沒有股票庫存
+					</div>
+				</div>
+
+				<div v-else class="px-4 py-10 text-center text-sm text-slate-500">
+					帳務資訊之後可接 Shioaji balance / settlement API
+				</div>
+			</section>
+		</section>
+	</main>
 </template>

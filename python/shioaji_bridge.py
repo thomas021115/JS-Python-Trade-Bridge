@@ -1,9 +1,10 @@
-import shioaji as sj
-import pandas as pd
-import os
-from dotenv import load_dotenv
 import datetime
+import os
 import time
+
+import pandas as pd
+import shioaji as sj
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -24,76 +25,121 @@ class ShioajiBridge:
                 fetch_contract=False,
             )
             self.api.fetch_contracts(contract_download=True)
-            print(">>> Shioaji 登入成功 (正式模式)")
+            print(">>> Shioaji login success")
             self.is_connected = True
         except Exception as e:
-            print(f">>> 登入失敗: {e}")
+            print(f">>> Shioaji login failed: {e}")
             self.is_connected = False
 
-    def get_kbars(self, contract_code: str, start: str | None = None, end: str | None = None):
-        # 1. 確保已連線
+    def logout(self):
+        if not self.is_connected:
+            return
+
+        self.api.logout()
+        self.is_connected = False
+
+    def _ensure_connected(self):
         if not self.is_connected:
             self.login()
 
-        # 2. 確保合約已抓到 (重試機制)
+        if not self.is_connected:
+            raise RuntimeError("shioaji_not_connected")
+
+    def _enum_value(self, value):
+        if value is None:
+            return None
+        if hasattr(value, "value"):
+            return value.value
+        if hasattr(value, "name"):
+            return value.name
+        return str(value)
+
+    def _stock_name(self, code: str):
+        try:
+            contract = self.api.Contracts.Stocks[code]
+            return getattr(contract, "name", None)
+        except Exception:
+            return None
+
+    def get_kbars(self, contract_code: str, start: str | None = None, end: str | None = None):
+        self._ensure_connected()
+
         contract = None
-        for _ in range(3): # 嘗試 3 次
+        for _ in range(3):
             try:
                 contract = self.api.Contracts.Stocks[contract_code]
                 break
             except Exception:
-                print(f"等待合約下載中... (retry for {contract_code})")
+                print(f"Waiting for contract: {contract_code}")
                 time.sleep(1)
-        
+
         if contract is None:
-            print(f"錯誤: 找不到合約 {contract_code}，可能是合約下載未完成")
+            print(f"Contract not found: {contract_code}")
             return None
 
-        print(f" 取得合約: {contract.name} ({contract.code})")
+        print(f"Contract loaded: {contract.name} ({contract.code})")
 
-        # 3. 擴大日期範圍 (抓 30 天，確保避開連假或沒資料的日子)
         today = datetime.date.today()
+        start_date = start or (today - datetime.timedelta(days=30)).isoformat()
+        end_date = end or (today + datetime.timedelta(days=1)).isoformat()
 
-        if start is None:
-            start_date = (today - datetime.timedelta(days=30)).isoformat()
-        else:
-            start_date = start
-
-        if end is None:
-            end_date = (today + datetime.timedelta(days=1)).isoformat()
-        else:
-            end_date = end
-
-        print(f"🔍 正在抓取範圍: {start_date} ~ {end_date}")
+        print(f"Fetching kbars: {contract_code} {start_date} ~ {end_date}")
 
         try:
-            # 抓取資料
             kbars = self.api.kbars(contract, start=start_date, end=end_date)
-            
-            # 4. 強制轉換資料格式 (最穩定的寫法)
             df = pd.DataFrame({
                 "ts": pd.to_datetime(kbars.ts),
                 "Open": kbars.Open,
                 "High": kbars.High,
                 "Low": kbars.Low,
                 "Close": kbars.Close,
-                "Volume": kbars.Volume
+                "Volume": kbars.Volume,
             })
 
-            # 過濾空資料
             if df.empty:
-                print("❌ 資料庫回傳空值 (Empty DataFrame)")
+                print("No kbar data returned")
                 return None
-            
-            # 轉換數值型態 (防呆)
-            df['Close'] = df['Close'].astype(float)
-            df['Volume'] = df['Volume'].astype(int)
 
-            print(f"🎉 成功抓取 {len(df)} 筆資料！")
+            df["Close"] = df["Close"].astype(float)
+            df["Volume"] = df["Volume"].astype(int)
+
+            print(f"Fetched {len(df)} kbar rows")
             return df
 
         except Exception as e:
-            print(f"❌ 抓取或轉換過程失敗: {e}")
+            print(f"Failed to fetch kbars: {e}")
             return None
+
+    def get_stock_positions(self):
+        self._ensure_connected()
+
+        positions = self.api.list_positions(self.api.stock_account)
+        rows = []
+
+        for position in positions:
+            code = str(getattr(position, "code", ""))
+            quantity = int(getattr(position, "quantity", 0) or 0)
+            price = float(getattr(position, "price", 0) or 0)
+            last_price = float(getattr(position, "last_price", 0) or 0)
+            pnl = float(getattr(position, "pnl", 0) or 0)
+            cost = quantity * price
+
+            rows.append({
+                "id": int(getattr(position, "id", 0) or 0),
+                "code": code,
+                "name": self._stock_name(code),
+                "direction": self._enum_value(getattr(position, "direction", None)),
+                "quantity": quantity,
+                "yd_quantity": int(getattr(position, "yd_quantity", 0) or 0),
+                "price": price,
+                "last_price": last_price,
+                "pnl": pnl,
+                "pnl_rate": round((pnl / cost) * 100, 2) if cost else 0.0,
+                "market_value": round(quantity * last_price, 2),
+                "cond": self._enum_value(getattr(position, "cond", None)),
+            })
+
+        return rows
+
 
 bridge = ShioajiBridge()
