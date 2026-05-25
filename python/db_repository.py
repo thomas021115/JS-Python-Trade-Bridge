@@ -1,23 +1,36 @@
-from sqlalchemy import text
 from datetime import datetime, timedelta
 from sqlalchemy import text
 
-def save_ai_report(db, symbol: str, report_markdown: str):
+def save_ai_report(
+    db,
+    symbol: str,
+    report_markdown: str,
+    report_type: str = "technical_mvp",
+    source: str = "shioaji",
+):
     sql = text("""
         INSERT INTO ai_report (
             symbol,
-            report_markdown
+            report_type,
+            report_markdown,
+            source
         )
         VALUES (
             :symbol,
-            :report_markdown
+            :report_type,
+            :report_markdown,
+            :source
         )
     """)
 
-    db.execute(sql, {
+    result = db.execute(sql, {
         "symbol": symbol,
-        "report_markdown": report_markdown
+        "report_type": report_type,
+        "report_markdown": report_markdown,
+        "source": source,
     })
+
+    return result.lastrowid
 
 def save_stock(db, symbol: str, name: str | None = None, market: str | None = None):
     sql = text("""

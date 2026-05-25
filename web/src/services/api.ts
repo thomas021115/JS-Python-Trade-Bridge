@@ -41,6 +41,11 @@ export interface AiReportResponse {
     code: string;
     report?: string;
     error?: string;
+    saved?: boolean;
+    report_id?: number;
+    daily_price_saved?: number;
+    technical_snapshot_saved?: number;
+    source?: string;
 }
 
 export interface StockPosition {

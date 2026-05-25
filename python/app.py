@@ -1,32 +1,39 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from shioaji_bridge import bridge
+from sqlalchemy import text
+
+from database import SessionLocal
+from db_repository import (
+    get_daily_price_between,
+    get_recent_daily_price,
+    save_ai_report,
+    save_daily_price,
+    save_stock,
+    save_technical_snapshot,
+)
 from indicators import add_indicators_v2, pct_change_n
 from report_generator import generate_ai_markdown
-from contextlib import asynccontextmanager
-from database import SessionLocal
-from db_repository import save_stock, save_daily_price, save_technical_snapshot,save_ai_report, get_recent_daily_price,get_daily_price_between
+from shioaji_bridge import bridge
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # startup
-    print("正在啟動 Shioaji Bridge...")
+    print("Starting Shioaji Bridge...")
     bridge.login()
 
     yield
 
-    # shutdown
     try:
         bridge.logout()
-        print("Shioaji Bridge 已登出")
+        print("Shioaji Bridge stopped.")
     except Exception:
         pass
 
 
 app = FastAPI(lifespan=lifespan)
 
-
-# 允許跨域 (讓 Node.js 或瀏覽器可以呼叫)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,9 +41,104 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+def _safe_ratio(a, b):
+    return round(float(a) / float(b), 4) if float(b) != 0 else 0.0
+
+
+def _recent_rows(df, rows: int = 20):
+    return (
+        df.tail(rows)[["ts", "Open", "High", "Low", "Close", "Volume"]]
+        .rename(
+            columns={
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+            }
+        )
+        .assign(ts=lambda data: data["ts"].astype(str))
+        .to_dict(orient="records")
+    )
+
+
+def _get_db_debug_snapshot(db, symbol: str):
+    target = symbol.strip()
+
+    db_info = db.execute(text("""
+        SELECT
+            DATABASE() AS database_name,
+            @@hostname AS mysql_hostname,
+            @@port AS mysql_port,
+            NOW() AS mysql_now
+    """)).mappings().one()
+
+    daily_summary = db.execute(text("""
+        SELECT
+            COUNT(*) AS row_count,
+            MIN(ts) AS first_ts,
+            MAX(ts) AS latest_ts,
+            MAX(created_at) AS latest_created_at
+        FROM daily_price
+        WHERE symbol = :symbol
+    """), {"symbol": target}).mappings().one()
+
+    recent_daily = db.execute(text("""
+        SELECT
+            symbol,
+            ts,
+            open_price,
+            high_price,
+            low_price,
+            close_price,
+            volume,
+            created_at
+        FROM daily_price
+        WHERE symbol = :symbol
+        ORDER BY ts DESC
+        LIMIT 5
+    """), {"symbol": target}).mappings().all()
+
+    recent_reports = db.execute(text("""
+        SELECT
+            id,
+            symbol,
+            report_type,
+            source,
+            CHAR_LENGTH(report_markdown) AS report_length,
+            created_at
+        FROM ai_report
+        WHERE symbol = :symbol
+        ORDER BY id DESC
+        LIMIT 5
+    """), {"symbol": target}).mappings().all()
+
+    return {
+        "symbol": target,
+        "database": {
+            "name": db_info["database_name"],
+            "mysql_hostname": db_info["mysql_hostname"],
+            "mysql_port": db_info["mysql_port"],
+            "mysql_now": str(db_info["mysql_now"]),
+        },
+        "daily_price": {
+            "row_count": int(daily_summary["row_count"] or 0),
+            "first_ts": str(daily_summary["first_ts"]) if daily_summary["first_ts"] else None,
+            "latest_ts": str(daily_summary["latest_ts"]) if daily_summary["latest_ts"] else None,
+            "latest_created_at": str(daily_summary["latest_created_at"]) if daily_summary["latest_created_at"] else None,
+            "recent_rows": [dict(row) for row in recent_daily],
+        },
+        "ai_report": {
+            "recent_rows": [dict(row) for row in recent_reports],
+        },
+    }
+
+
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "JS-Python-Trade-Bridge is Running!"}
+
 
 @app.get("/api/account/stock-positions")
 def get_account_stock_positions():
@@ -58,13 +160,14 @@ def get_account_stock_positions():
             "error": str(e),
         }
 
+
 @app.get("/api/kline/{symbol}")
 def get_kline_data(symbol: str):
-    print(f"正在抓取 {symbol} 資料...")
+    print(f"Fetching kline data for {symbol}...")
 
     try:
         df = bridge.get_kbars(symbol)
-        if df is None:
+        if df is None or df.empty:
             return {"error": "no_data", "symbol": symbol}
 
         df_analyzed = add_indicators_v2(df)
@@ -77,26 +180,29 @@ def get_kline_data(symbol: str):
 @app.get("/api/ai-briefing/{code}")
 def ai_briefing(code: str):
     df = bridge.get_kbars(code)
-    if df is None:
+    if df is None or df.empty:
         return {"error": "no_data", "code": code}
 
-    # 先把欄位統一成小寫，避免 Open/open 這種問題
     df2 = df.copy()
     df2.columns = [str(c).lower() for c in df2.columns]
 
-    # 有些版本時間欄位叫 t
     if "ts" not in df2.columns and "t" in df2.columns:
         df2 = df2.rename(columns={"t": "ts"})
 
     want = ["ts", "open", "high", "low", "close", "volume"]
     cols = [c for c in want if c in df2.columns]
 
-    # 如果 cols 還是空，就直接回傳目前 df2 的欄位讓你看
     if not cols:
-        return {"error": "column_mismatch", "code": code, "columns": df2.columns.tolist(), "shape": list(df2.shape)}
+        return {
+            "error": "column_mismatch",
+            "code": code,
+            "columns": df2.columns.tolist(),
+            "shape": list(df2.shape),
+        }
 
     rows = df2[cols].tail(5).to_dict(orient="records")
     return {"code": code, "rows": rows}
+
 
 @app.get("/api/ai-report/{code}")
 def ai_report(code: str):
@@ -113,30 +219,56 @@ def ai_report(code: str):
         md = generate_ai_markdown(code, df)
 
         save_stock(db, symbol=code)
-        save_daily_price(db, code, df)
-        save_technical_snapshot(db, code, df)
-        save_ai_report(db, code, md)
+        daily_count = save_daily_price(db, code, df)
+        snapshot_count = save_technical_snapshot(db, code, df)
+        report_id = save_ai_report(db, code, md)
 
         db.commit()
+        db_snapshot = _get_db_debug_snapshot(db, code)
 
         return {
             "code": code,
             "report": md,
-            "saved": True
+            "saved": True,
+            "report_id": report_id,
+            "daily_price_saved": daily_count,
+            "technical_snapshot_saved": snapshot_count,
+            "source": "shioaji",
+            "db": db_snapshot,
         }
 
     except Exception as e:
         db.rollback()
-        print("產生戰報失敗:", e)
+        print("AI report error:", e)
 
         return {
             "code": code,
             "error": str(e),
-            "saved": False
+            "saved": False,
         }
 
     finally:
         db.close()
+
+
+@app.get("/api/debug/db/{symbol}")
+def debug_database(symbol: str):
+    db = SessionLocal()
+
+    try:
+        return {
+            "success": True,
+            **_get_db_debug_snapshot(db, symbol),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "symbol": symbol,
+            "error": str(e),
+        }
+    finally:
+        db.close()
+
 
 @app.get("/api/ai-payload/{symbol}")
 def get_ai_payload(symbol: str):
@@ -144,7 +276,7 @@ def get_ai_payload(symbol: str):
         df = bridge.get_kbars(symbol)
         if df is None or df.empty:
             return {"error": "no_data", "symbol": symbol}
-        
+
         df = df.copy()
 
         if "ts" not in df.columns and "t" in df.columns:
@@ -154,9 +286,6 @@ def get_ai_payload(symbol: str):
 
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else latest
-
-        def safe_ratio(a, b):
-            return round(float(a) / float(b), 4) if float(b) != 0 else 0.0
 
         payload = {
             "symbol": symbol,
@@ -193,9 +322,9 @@ def get_ai_payload(symbol: str):
                 "volume_prev_bar": float(prev["Volume"]),
                 "volume_ma5": float(latest["VOL_MA5"]),
                 "volume_ma20": float(latest["VOL_MA20"]),
-                "volume_vs_prev_bar": safe_ratio(latest["Volume"], prev["Volume"]),
-                "volume_vs_ma5": safe_ratio(latest["Volume"], latest["VOL_MA5"]),
-                "volume_vs_ma20": safe_ratio(latest["Volume"], latest["VOL_MA20"]),
+                "volume_vs_prev_bar": _safe_ratio(latest["Volume"], prev["Volume"]),
+                "volume_vs_ma5": _safe_ratio(latest["Volume"], latest["VOL_MA5"]),
+                "volume_vs_ma20": _safe_ratio(latest["Volume"], latest["VOL_MA20"]),
             },
             "levels": {
                 "support_1": float(latest["SUPPORT_1"]),
@@ -207,31 +336,29 @@ def get_ai_payload(symbol: str):
             },
             "changes": {
                 "change_1bar": round(float(latest["Close"] - prev["Close"]), 2),
-                "change_1bar_pct": round(((float(latest["Close"]) - float(prev["Close"])) / float(prev["Close"])) * 100, 2) if float(prev["Close"]) != 0 else 0.0,
+                "change_1bar_pct": round(
+                    ((float(latest["Close"]) - float(prev["Close"])) / float(prev["Close"])) * 100,
+                    2,
+                )
+                if float(prev["Close"]) != 0
+                else 0.0,
                 "change_3bar_pct": pct_change_n(df["Close"], 3),
                 "change_5bar_pct": pct_change_n(df["Close"], 5),
                 "change_20bar_pct": pct_change_n(df["Close"], 20),
             },
-            "recent_rows": df.tail(20)[["ts", "Open", "High", "Low", "Close", "Volume"]]
-                .rename(columns={
-                    "Open": "open",
-                    "High": "high",
-                    "Low": "low",
-                    "Close": "close",
-                    "Volume": "volume",
-                })
-                .to_dict(orient="records"),
+            "recent_rows": _recent_rows(df, rows=20),
         }
 
         return payload
 
     except Exception as e:
         return {"error": str(e), "symbol": symbol}
-    
+
+
 @app.post("/api/sync/{symbol}")
 def sync_stock_data(symbol: str):
     symbol = symbol.strip()
-    print(f"開始同步 {symbol} 到 MySQL...")
+    print(f"Syncing {symbol} to MySQL...")
 
     db = SessionLocal()
 
@@ -242,7 +369,7 @@ def sync_stock_data(symbol: str):
             return {
                 "success": False,
                 "symbol": symbol,
-                "error": "no_data"
+                "error": "no_data",
             }
 
         df_analyzed = add_indicators_v2(df)
@@ -257,7 +384,7 @@ def sync_stock_data(symbol: str):
             "success": True,
             "symbol": symbol,
             "daily_price_saved": daily_count,
-            "technical_snapshot_saved": snapshot_count
+            "technical_snapshot_saved": snapshot_count,
         }
 
     except Exception as e:
@@ -266,11 +393,12 @@ def sync_stock_data(symbol: str):
         return {
             "success": False,
             "symbol": symbol,
-            "error": str(e)
+            "error": str(e),
         }
 
     finally:
         db.close()
+
 
 @app.get("/api/db/kline/{symbol}")
 def get_kline_from_db(symbol: str, days: int = 7):
@@ -287,22 +415,23 @@ def get_kline_from_db(symbol: str, days: int = 7):
             "source": "database",
             "days": days,
             "count": len(rows),
-            "rows": rows
+            "rows": rows,
         }
 
     except Exception as e:
-        print("從資料庫讀取 K 線失敗:", e)
+        print("Failed to read kline data from database:", e)
 
         return {
             "success": False,
             "symbol": symbol,
             "source": "database",
-            "error": str(e)
+            "error": str(e),
         }
 
     finally:
-        db.close()  
-        
+        db.close()
+
+
 @app.get("/api/test/db-kline/{symbol}")
 def test_db_kline(symbol: str, start: str, end: str):
     db = SessionLocal()
@@ -322,7 +451,8 @@ def test_db_kline(symbol: str, start: str, end: str):
 
     finally:
         db.close()
-        
+
+
 @app.get("/api/test/kbars/{symbol}")
 def test_kbars(symbol: str, start: str, end: str):
     df = bridge.get_kbars(symbol, start=start, end=end)
@@ -331,7 +461,7 @@ def test_kbars(symbol: str, start: str, end: str):
         return {
             "success": False,
             "symbol": symbol,
-            "error": "no_data"
+            "error": "no_data",
         }
 
     return {

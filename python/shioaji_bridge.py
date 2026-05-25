@@ -113,29 +113,37 @@ class ShioajiBridge:
     def get_stock_positions(self):
         self._ensure_connected()
 
-        positions = self.api.list_positions(self.api.stock_account)
+        positions = self.api.list_positions(
+            self.api.stock_account,
+            unit=sj.constant.Unit.Share,
+        )
         rows = []
 
         for position in positions:
+            print("[Shioaji position raw]", getattr(position, "__dict__", position))
+
             code = str(getattr(position, "code", ""))
             quantity = int(getattr(position, "quantity", 0) or 0)
+            yd_quantity = int(getattr(position, "yd_quantity", 0) or 0)
+            display_quantity = quantity or yd_quantity
             price = float(getattr(position, "price", 0) or 0)
             last_price = float(getattr(position, "last_price", 0) or 0)
             pnl = float(getattr(position, "pnl", 0) or 0)
-            cost = quantity * price
+            cost = display_quantity * price
+            market_value = display_quantity * last_price
 
             rows.append({
                 "id": int(getattr(position, "id", 0) or 0),
                 "code": code,
                 "name": self._stock_name(code),
                 "direction": self._enum_value(getattr(position, "direction", None)),
-                "quantity": quantity,
-                "yd_quantity": int(getattr(position, "yd_quantity", 0) or 0),
+                "quantity": display_quantity,
+                "yd_quantity": yd_quantity,
                 "price": price,
                 "last_price": last_price,
                 "pnl": pnl,
                 "pnl_rate": round((pnl / cost) * 100, 2) if cost else 0.0,
-                "market_value": round(quantity * last_price, 2),
+                "market_value": round(market_value, 2),
                 "cond": self._enum_value(getattr(position, "cond", None)),
             })
 
