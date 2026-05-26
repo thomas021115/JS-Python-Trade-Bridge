@@ -6,6 +6,9 @@ from typing import Any
 import pandas as pd
 
 
+MAX_DAILY_SAMPLE_ROWS = 120
+
+
 def _num(value: Any, digits: int = 2) -> float:
     try:
         if value is None or not math.isfinite(float(value)):
@@ -22,149 +25,219 @@ def _pct(current: Any, previous: Any) -> float:
     return round((_num(current, 6) - previous_value) / previous_value * 100, 2)
 
 
-def _trend_label(last: pd.Series) -> str:
-    close = _num(last.get("Close"))
-    ma5 = _num(last.get("MA5"))
-    ma20 = _num(last.get("MA20"))
-    macd_hist = _num(last.get("MACD_HIST"))
-
-    if close > ma5 > ma20 and macd_hist > 0:
-        return "偏多"
-    if close < ma5 < ma20 and macd_hist < 0:
-        return "偏空"
-    return "震盪"
+def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
+    prepared = df.copy()
+    prepared["ts"] = pd.to_datetime(prepared["ts"])
+    return prepared.sort_values("ts").reset_index(drop=True)
 
 
-def _risk_label(last: pd.Series) -> str:
-    rsi = _num(last.get("RSI"))
-    bb_width = _num(last.get("BB_WIDTH"), 4)
-
-    if rsi >= 70:
-        return "RSI 偏熱，追價風險較高"
-    if rsi <= 30:
-        return "RSI 偏低，留意反彈或弱勢延續"
-    if bb_width > 0.08:
-        return "波動放大，停損距離需要拉開"
-    return "指標位於中性區，等待量價突破"
-
-
-def _format_recent_rows(df: pd.DataFrame, rows: int = 20) -> str:
-    recent = df.tail(rows)[["ts", "Open", "High", "Low", "Close", "Volume"]].copy()
-    recent.columns = ["時間", "開盤", "最高", "最低", "收盤", "量"]
+def _format_coverage_rows(data_coverage: list[dict[str, Any]] | None) -> str:
+    if not data_coverage:
+        return "目前沒有資料覆蓋狀態。"
 
     lines = [
-        "| 時間 | 開盤 | 最高 | 最低 | 收盤 | 量 |",
-        "| :--- | ---: | ---: | ---: | ---: | ---: |",
+        "| 日期 | 是否交易日 | K 線資料筆數 | 來源 | 狀態 | DB 原始筆數 | 本次補抓筆數 |",
+        "| :--- | :---: | ---: | :--- | :--- | ---: | ---: |",
     ]
 
-    for _, row in recent.iterrows():
+    for row in data_coverage:
         lines.append(
-            "| {ts} | {open} | {high} | {low} | {close} | {volume} |".format(
-                ts=row["時間"],
-                open=_num(row["開盤"]),
-                high=_num(row["最高"]),
-                low=_num(row["最低"]),
-                close=_num(row["收盤"]),
-                volume=int(_num(row["量"], 0)),
+            "| {date} | {is_trading_day} | {kbar_count} | {source} | {status} | {db_count} | {fetched_count} |".format(
+                date=row.get("date", "-"),
+                is_trading_day="是" if row.get("is_trading_day") else "否",
+                kbar_count=int(row.get("kbar_count") or 0),
+                source=row.get("source", "-"),
+                status=row.get("status", "-"),
+                db_count=int(row.get("db_count") or 0),
+                fetched_count=int(row.get("fetched_count") or 0),
             )
         )
 
     return "\n".join(lines)
 
 
-def generate_ai_markdown(symbol: str, df: pd.DataFrame) -> str:
-    """
-    Generate a deterministic MVP markdown report from analyzed kbar data.
-
-    This function does not call an LLM yet. It turns the fetched Shioaji data
-    plus calculated indicators into a fuller report that can be saved and
-    previewed immediately.
-    """
-    if df is None or df.empty:
-        return f"# {symbol} AI 技術戰報\n\n目前沒有可分析的 K 線資料。"
-
-    if len(df) < 2:
-        last = df.iloc[-1]
-        return f"# {symbol} AI 技術戰報\n\n資料筆數不足，僅取得 1 筆：{last.get('ts', '-')}"
-
+def _format_range_summary(df: pd.DataFrame) -> str:
+    first = df.iloc[0]
     last = df.iloc[-1]
-    prev = df.iloc[-2]
-    recent = df.tail(20)
+    close_change = _num(last.get("Close") - first.get("Open"))
+    close_change_pct = _pct(last.get("Close"), first.get("Open"))
+    grouped_days = df["ts"].dt.date.nunique()
 
-    close = _num(last.get("Close"))
-    prev_close = _num(prev.get("Close"))
-    change = round(close - prev_close, 2)
-    change_pct = _pct(close, prev_close)
+    rows = [
+        ("區間第一筆時間", first.get("ts")),
+        ("區間最後一筆時間", last.get("ts")),
+        ("區間交易日數", grouped_days),
+        ("區間 K 線筆數", len(df)),
+        ("區間開盤", _num(first.get("Open"))),
+        ("區間最高", _num(df["High"].max())),
+        ("區間最低", _num(df["Low"].min())),
+        ("區間最後收盤", _num(last.get("Close"))),
+        ("區間收盤變化", close_change),
+        ("區間收盤變化百分比", f"{close_change_pct}%"),
+        ("區間總量", int(_num(df["Volume"].sum(), 0))),
+    ]
 
-    high_20 = _num(recent["High"].max())
-    low_20 = _num(recent["Low"].min())
-    volume = int(_num(last.get("Volume"), 0))
-    vol_ma5 = _num(last.get("VOL_MA5"), 0)
-    vol_ma20 = _num(last.get("VOL_MA20"), 0)
-    vol_vs_ma5 = _pct(volume, vol_ma5)
-    vol_vs_ma20 = _pct(volume, vol_ma20)
+    lines = [
+        "| 欄位 | 值 |",
+        "| :--- | :--- |",
+    ]
+    lines.extend(f"| {name} | {value} |" for name, value in rows)
+    return "\n".join(lines)
 
-    trend = _trend_label(last)
-    risk = _risk_label(last)
-    recent_table = _format_recent_rows(df, rows=20)
 
-    return f"""# {symbol} AI 技術戰報
+def _format_daily_ohlcv_summary(df: pd.DataFrame) -> str:
+    lines = [
+        "| 日期 | 第一筆時間 | 最後一筆時間 | 筆數 | 開盤 | 最高 | 最低 | 收盤 | 總量 |",
+        "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
 
-> 資料時間：{last.get("ts", "-")}
-> 資料筆數：{len(df)} 筆，以下重點以最近 20 筆 K 線為主。
+    for trade_date, daily in df.groupby(df["ts"].dt.date, sort=True):
+        first = daily.iloc[0]
+        last = daily.iloc[-1]
+        lines.append(
+            "| {date} | {first_ts} | {last_ts} | {count} | {open} | {high} | {low} | {close} | {volume} |".format(
+                date=trade_date,
+                first_ts=first["ts"],
+                last_ts=last["ts"],
+                count=len(daily),
+                open=_num(first["Open"]),
+                high=_num(daily["High"].max()),
+                low=_num(daily["Low"].min()),
+                close=_num(last["Close"]),
+                volume=int(_num(daily["Volume"].sum(), 0)),
+            )
+        )
 
-## 1. 快速結論
-- 目前判讀：**{trend}**
-- 最新收盤：**{close}**
-- 單根變化：**{change} ({change_pct}%)**
-- 20 筆區間：高點 **{high_20}** / 低點 **{low_20}**
-- 主要風險：{risk}
+    return "\n".join(lines)
 
-## 2. 價格與均線
-| 指標 | 數值 | 解讀 |
-| :--- | ---: | :--- |
-| Close | {close} | 最新收盤價 |
-| MA5 | {_num(last.get("MA5"))} | 短線均線 |
-| MA20 | {_num(last.get("MA20"))} | 中短線均線 |
-| MA60 | {_num(last.get("MA60"))} | 中期均線 |
-| MA120 | {_num(last.get("MA120"))} | 長期均線 |
 
-## 3. 動能指標
-| 指標 | 數值 | 解讀 |
-| :--- | ---: | :--- |
-| RSI14 | {_num(last.get("RSI"))} | 70 以上偏熱，30 以下偏弱 |
-| MACD | {_num(last.get("MACD"))} | 快慢線差 |
-| MACD Signal | {_num(last.get("MACD_SIGNAL"))} | 訊號線 |
-| MACD Hist | {_num(last.get("MACD_HIST"))} | 大於 0 偏多，小於 0 偏空 |
-| K | {_num(last.get("K"))} | KD K 值 |
-| D | {_num(last.get("D"))} | KD D 值 |
-| CCI20 | {_num(last.get("CCI"))} | 正值偏強，負值偏弱 |
+def _format_indicator_snapshot(df: pd.DataFrame) -> str:
+    last = df.iloc[-1]
+    indicators = [
+        ("Close", last.get("Close")),
+        ("MA5", last.get("MA5")),
+        ("MA20", last.get("MA20")),
+        ("MA60", last.get("MA60")),
+        ("MA120", last.get("MA120")),
+        ("EMA12", last.get("EMA12")),
+        ("EMA26", last.get("EMA26")),
+        ("RSI14", last.get("RSI")),
+        ("MACD", last.get("MACD")),
+        ("MACD Signal", last.get("MACD_SIGNAL")),
+        ("MACD Hist", last.get("MACD_HIST")),
+        ("K", last.get("K")),
+        ("D", last.get("D")),
+        ("CCI20", last.get("CCI")),
+        ("ATR14", last.get("ATR14")),
+        ("BB Mid", last.get("BB_MID")),
+        ("BB Upper", last.get("BB_UPPER")),
+        ("BB Lower", last.get("BB_LOWER")),
+        ("BB Width", last.get("BB_WIDTH")),
+        ("VOL MA5", last.get("VOL_MA5")),
+        ("VOL MA20", last.get("VOL_MA20")),
+    ]
 
-## 4. 量能與波動
-| 指標 | 數值 |
-| :--- | ---: |
-| 最新量 | {volume} |
-| VOL MA5 | {vol_ma5} |
-| VOL MA20 | {vol_ma20} |
-| 量 vs MA5 | {vol_vs_ma5}% |
-| 量 vs MA20 | {vol_vs_ma20}% |
-| ATR14 | {_num(last.get("ATR14"))} |
-| BB Upper | {_num(last.get("BB_UPPER"))} |
-| BB Mid | {_num(last.get("BB_MID"))} |
-| BB Lower | {_num(last.get("BB_LOWER"))} |
-| BB Width | {_num(last.get("BB_WIDTH"), 4)} |
+    lines = [
+        "| 指標 | 最新值 |",
+        "| :--- | ---: |",
+    ]
+    lines.extend(f"| {name} | {_num(value, 4)} |" for name, value in indicators)
+    return "\n".join(lines)
+
+
+def _format_levels(df: pd.DataFrame) -> str:
+    last = df.iloc[-1]
+    return "\n".join([
+        "| 類型 | 第一 | 第二 | 第三 |",
+        "| :--- | ---: | ---: | ---: |",
+        f"| 支撐 | {_num(last.get('SUPPORT_1'))} | {_num(last.get('SUPPORT_2'))} | {_num(last.get('SUPPORT_3'))} |",
+        f"| 壓力 | {_num(last.get('RESIST_1'))} | {_num(last.get('RESIST_2'))} | {_num(last.get('RESIST_3'))} |",
+    ])
+
+
+def _format_one_minute_rows(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "查詢區間內沒有可列出的 1 分 K 線。"
+
+    sections = []
+
+    for trade_date, daily in df.groupby(df["ts"].dt.date, sort=True):
+        sample = daily.tail(MAX_DAILY_SAMPLE_ROWS)
+        lines = [
+            f"### {trade_date}（最後 {len(sample)} 筆）",
+            "",
+            "| 時間 | 開盤 | 最高 | 最低 | 收盤 | 量 |",
+            "| :--- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+
+        for _, row in sample.iterrows():
+            lines.append(
+                "| {ts} | {open} | {high} | {low} | {close} | {volume} |".format(
+                    ts=row["ts"],
+                    open=_num(row["Open"]),
+                    high=_num(row["High"]),
+                    low=_num(row["Low"]),
+                    close=_num(row["Close"]),
+                    volume=int(_num(row["Volume"], 0)),
+                )
+            )
+
+        sections.append("\n".join(lines))
+
+    return "\n\n".join(sections)
+
+
+def generate_ai_markdown(
+    symbol: str,
+    df: pd.DataFrame,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    data_source: str | None = None,
+    data_coverage: list[dict[str, Any]] | None = None,
+) -> str:
+    coverage_table = _format_coverage_rows(data_coverage)
+    date_range = f"{start_date or '-'} ~ {end_date or '-'}"
+    source_label = data_source or "unknown"
+
+    if df is None or df.empty:
+        return f"""# {symbol} AI 技術分析資料包
+
+> 分析區間：{date_range}
+> 資料來源：{source_label}
+> 最新資料時間：-
+> 使用資料筆數：0 筆
+
+## 1. 資料覆蓋狀態
+{coverage_table}
+
+查詢區間內沒有可分析的 K 線資料。
+"""
+
+    prepared = _prepare_df(df)
+    last = prepared.iloc[-1]
+
+    return f"""# {symbol} AI 技術分析資料包
+
+> 分析區間：{date_range}
+> 資料來源：{source_label}
+> 最新資料時間：{last.get("ts", "-")}
+> 使用資料筆數：{len(prepared)} 筆
+
+## 1. 資料覆蓋狀態
+{coverage_table}
+
+## 2. 區間統計摘要
+{_format_range_summary(prepared)}
+
+## 3. 每日 OHLCV 摘要
+{_format_daily_ohlcv_summary(prepared)}
+
+## 4. 技術指標快照
+{_format_indicator_snapshot(prepared)}
 
 ## 5. 支撐與壓力
-| 類型 | 第一 | 第二 | 第三 |
-| :--- | ---: | ---: | ---: |
-| 支撐 | {_num(last.get("SUPPORT_1"))} | {_num(last.get("SUPPORT_2"))} | {_num(last.get("SUPPORT_3"))} |
-| 壓力 | {_num(last.get("RESIST_1"))} | {_num(last.get("RESIST_2"))} | {_num(last.get("RESIST_3"))} |
+{_format_levels(prepared)}
 
-## 6. 最近 20 筆資料
-{recent_table}
-
-## 7. MVP 操作提示
-- 偏多情境：收盤站上 MA5/MA20 且 MACD Hist 轉正，可觀察是否有量能放大。
-- 偏空情境：跌破 MA20 且 RSI 走弱，優先控管風險。
-- 震盪情境：價格卡在支撐壓力之間，等突破或跌破後再判斷方向。
+## 6. 每日 1 分 K 線樣本
+{_format_one_minute_rows(prepared)}
 """

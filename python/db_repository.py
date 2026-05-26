@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta
+
+import pandas as pd
 from sqlalchemy import text
 
 def save_ai_report(
@@ -274,7 +276,7 @@ def get_daily_price_between(db, symbol: str, start_time, end_time):
         FROM daily_price
         WHERE symbol = :symbol
           AND ts >= :start_time
-          AND ts <= :end_time
+          AND ts < :end_time
         ORDER BY ts ASC
     """)
 
@@ -290,3 +292,29 @@ def get_daily_price_between(db, symbol: str, start_time, end_time):
         rows.append(dict(row._mapping))
 
     return rows
+
+
+def get_daily_price_df_between(db, symbol: str, start_time, end_time):
+    rows = get_daily_price_between(db, symbol, start_time, end_time)
+    return daily_price_rows_to_df(rows)
+
+
+def daily_price_rows_to_df(rows):
+    if not rows:
+        return pd.DataFrame(columns=["ts", "Open", "High", "Low", "Close", "Volume"])
+
+    normalized = []
+
+    for row in rows:
+        normalized.append({
+            "ts": row["ts"],
+            "Open": float(row["open_price"]),
+            "High": float(row["high_price"]),
+            "Low": float(row["low_price"]),
+            "Close": float(row["close_price"]),
+            "Volume": int(row["volume"]),
+        })
+
+    df = pd.DataFrame(normalized)
+    df["ts"] = pd.to_datetime(df["ts"])
+    return df.sort_values("ts").reset_index(drop=True)

@@ -46,6 +46,12 @@ export interface AiReportResponse {
     daily_price_saved?: number;
     technical_snapshot_saved?: number;
     source?: string;
+    data_source?: 'database' | 'shioaji' | 'mixed' | 'none';
+    start_date?: string;
+    end_date?: string;
+    timeframe?: string;
+    db_rows_used?: number;
+    shioaji_rows_fetched?: number;
 }
 
 export interface StockPosition {
@@ -80,8 +86,13 @@ export const api = {
     getAiBriefing: (code: string) => {
         return http.get<any, BriefingResponse>(`/api/ai-briefing/${code}`);
     },
-    getAiReport: (code: string) => {
-        return http.get<any, AiReportResponse>(`/api/ai-report/${code}`);
+    getAiReport: (code: string, startDate?: string, endDate?: string) => {
+        return http.get<any, AiReportResponse>(`/api/ai-report/${code}`, {
+            params: {
+                start_date: startDate,
+                end_date: endDate,
+            },
+        });
     },
     getStockPositions: () => {
         return http.get<any, StockPositionsResponse>('/api/account/stock-positions');

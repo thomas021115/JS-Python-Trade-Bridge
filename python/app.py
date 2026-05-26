@@ -1,12 +1,15 @@
 from contextlib import asynccontextmanager
+from datetime import date, datetime, timedelta
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
 from sqlalchemy import text
 
 from database import SessionLocal
 from db_repository import (
     get_daily_price_between,
+    get_daily_price_df_between,
     get_recent_daily_price,
     save_ai_report,
     save_daily_price,
@@ -16,6 +19,11 @@ from db_repository import (
 from indicators import add_indicators_v2, pct_change_n
 from report_generator import generate_ai_markdown
 from shioaji_bridge import bridge
+
+
+DEFAULT_REPORT_DAYS = 30
+TIMEFRAME_1M = "1m"
+MIN_COMPLETE_1M_ROWS = 240
 
 
 @asynccontextmanager
@@ -44,6 +52,136 @@ app.add_middleware(
 
 def _safe_ratio(a, b):
     return round(float(a) / float(b), 4) if float(b) != 0 else 0.0
+
+
+def _parse_report_dates(start_date: str | None, end_date: str | None):
+    today = date.today()
+    parsed_end = date.fromisoformat(end_date) if end_date else today
+    parsed_start = date.fromisoformat(start_date) if start_date else parsed_end - timedelta(days=DEFAULT_REPORT_DAYS)
+
+    if parsed_start > parsed_end:
+        raise ValueError("start_date cannot be later than end_date")
+
+    start_dt = datetime.combine(parsed_start, datetime.min.time())
+    end_exclusive = datetime.combine(parsed_end + timedelta(days=1), datetime.min.time())
+    return parsed_start, parsed_end, start_dt, end_exclusive
+
+
+def _weekday_dates(start: date, end: date):
+    dates = []
+    current = start
+
+    while current <= end:
+        if current.weekday() < 5:
+            dates.append(current)
+        current += timedelta(days=1)
+
+    return dates
+
+
+def _calendar_dates(start: date, end: date):
+    dates = []
+    current = start
+
+    while current <= end:
+        dates.append(current)
+        current += timedelta(days=1)
+
+    return dates
+
+
+def _counts_by_date(df):
+    if df is None or df.empty:
+        return {}
+
+    dated = df.copy()
+    dated["trade_date"] = pd.to_datetime(dated["ts"]).dt.date
+    return dated.groupby("trade_date").size().to_dict()
+
+
+def _compact_date_ranges(dates: list[date]):
+    if not dates:
+        return []
+
+    ranges = []
+    range_start = dates[0]
+    previous = dates[0]
+
+    for current in dates[1:]:
+        if current == previous + timedelta(days=1):
+            previous = current
+            continue
+
+        ranges.append((range_start, previous))
+        range_start = current
+        previous = current
+
+    ranges.append((range_start, previous))
+    return ranges
+
+
+def _fetch_required_weekday_ranges(db_df, start: date, end: date):
+    if db_df.empty:
+        return _compact_date_ranges(_weekday_dates(start, end))
+
+    db_counts = _counts_by_date(db_df)
+    fetch_dates = [
+        d
+        for d in _weekday_dates(start, end)
+        if db_counts.get(d, 0) < MIN_COMPLETE_1M_ROWS
+    ]
+    return _compact_date_ranges(fetch_dates)
+
+
+def _build_data_coverage(start: date, end: date, db_df, final_df, fetched_frames):
+    db_counts = _counts_by_date(db_df)
+    final_counts = _counts_by_date(final_df)
+    fetched_counts = {}
+
+    for frame in fetched_frames:
+        for trade_date, count in _counts_by_date(frame).items():
+            fetched_counts[trade_date] = fetched_counts.get(trade_date, 0) + int(count)
+
+    rows = []
+
+    for current in _calendar_dates(start, end):
+        is_weekday = current.weekday() < 5
+        db_count = int(db_counts.get(current, 0))
+        fetched_count = int(fetched_counts.get(current, 0))
+        final_count = int(final_counts.get(current, 0))
+        was_fetch_attempted = is_weekday and db_count < MIN_COMPLETE_1M_ROWS
+
+        if not is_weekday:
+            source = "none"
+            status = "非交易日"
+        elif final_count == 0 and was_fetch_attempted:
+            source = "shioaji"
+            status = "可能國定假日 / 休市 / Shioaji 無資料"
+        elif final_count < MIN_COMPLETE_1M_ROWS:
+            source = "mixed" if db_count > 0 and fetched_count > 0 else "database" if db_count > 0 else "shioaji"
+            status = "可能不完整"
+        elif fetched_count > 0 and db_count > 0:
+            source = "mixed"
+            status = "已補抓"
+        elif fetched_count > 0:
+            source = "shioaji"
+            status = "已補抓"
+        else:
+            source = "database"
+            status = "完整"
+
+        rows.append({
+            "date": current.isoformat(),
+            "is_trading_day": is_weekday,
+            "db_count": db_count,
+            "fetched_count": fetched_count,
+            "kbar_count": final_count,
+            "source": source,
+            "status": status,
+            "fetch_attempted": was_fetch_attempted,
+        })
+
+    return rows
 
 
 def _recent_rows(df, rows: int = 20):
@@ -205,23 +343,83 @@ def ai_briefing(code: str):
 
 
 @app.get("/api/ai-report/{code}")
-def ai_report(code: str):
+def ai_report(code: str, start_date: str | None = None, end_date: str | None = None):
     code = code.strip()
     db = SessionLocal()
 
     try:
-        df = bridge.get_kbars(code)
-
-        if df is None or df.empty:
-            return {"error": "no_data", "code": code}
-
-        df = add_indicators_v2(df)
-        md = generate_ai_markdown(code, df)
+        parsed_start, parsed_end, start_dt, end_exclusive = _parse_report_dates(start_date, end_date)
+        db_df = get_daily_price_df_between(db, code, start_dt, end_exclusive)
+        fetch_ranges = _fetch_required_weekday_ranges(db_df, parsed_start, parsed_end)
+        fetched_frames = []
 
         save_stock(db, symbol=code)
-        daily_count = save_daily_price(db, code, df)
-        snapshot_count = save_technical_snapshot(db, code, df)
-        report_id = save_ai_report(db, code, md)
+
+        for fetch_start, fetch_end in fetch_ranges:
+            fetched_df = bridge.get_kbars(
+                code,
+                start=fetch_start.isoformat(),
+                end=fetch_end.isoformat(),
+            )
+
+            if fetched_df is None or fetched_df.empty:
+                continue
+
+            fetched_frames.append(fetched_df)
+            save_daily_price(db, code, fetched_df)
+
+        db.commit()
+
+        report_df = get_daily_price_df_between(db, code, start_dt, end_exclusive)
+
+        if report_df.empty:
+            return {
+                "error": "no_data",
+                "code": code,
+                "start_date": parsed_start.isoformat(),
+                "end_date": parsed_end.isoformat(),
+                "data_source": "none",
+            }
+
+        analyzed_df = add_indicators_v2(report_df)
+        snapshot_count = save_technical_snapshot(db, code, analyzed_df)
+        data_coverage = _build_data_coverage(
+            parsed_start,
+            parsed_end,
+            db_df,
+            report_df,
+            fetched_frames,
+        )
+
+        initial_db_count = len(db_df)
+        fetched_count = sum(len(frame) for frame in fetched_frames)
+        daily_count = fetched_count
+
+        if fetched_count == 0:
+            data_source = "database"
+        elif initial_db_count == 0:
+            data_source = "shioaji"
+        else:
+            data_source = "mixed"
+
+        fetched_ranges = [
+            {
+                "start_date": fetch_start.isoformat(),
+                "end_date": fetch_end.isoformat(),
+            }
+            for fetch_start, fetch_end in fetch_ranges
+        ]
+
+        md = generate_ai_markdown(
+            code,
+            analyzed_df,
+            start_date=parsed_start.isoformat(),
+            end_date=parsed_end.isoformat(),
+            data_source=data_source,
+            data_coverage=data_coverage,
+        )
+
+        report_id = save_ai_report(db, code, md, source=data_source)
 
         db.commit()
         db_snapshot = _get_db_debug_snapshot(db, code)
@@ -233,7 +431,15 @@ def ai_report(code: str):
             "report_id": report_id,
             "daily_price_saved": daily_count,
             "technical_snapshot_saved": snapshot_count,
-            "source": "shioaji",
+            "source": data_source,
+            "data_source": data_source,
+            "start_date": parsed_start.isoformat(),
+            "end_date": parsed_end.isoformat(),
+            "timeframe": TIMEFRAME_1M,
+            "db_rows_used": len(report_df),
+            "shioaji_rows_fetched": fetched_count,
+            "fetched_ranges": fetched_ranges,
+            "data_coverage": data_coverage,
             "db": db_snapshot,
         }
 

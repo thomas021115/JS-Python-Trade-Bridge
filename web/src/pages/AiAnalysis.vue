@@ -6,10 +6,11 @@ import AppCard from "@/components/ui/AppCard.vue";
 import { useReport } from "@/stores/report";
 
 const s = useReport();
-const { symbol, report, loadingReport, errorMsg } = storeToRefs(s);
+const { symbol, startDate, endDate, report, loadingReport, errorMsg } = storeToRefs(s);
 
 const reportText = computed(() => report.value?.report?.trim() ?? "");
 const hasReport = computed(() => reportText.value.length > 0);
+const dataSource = computed(() => report.value?.data_source ?? report.value?.source ?? "-");
 const statusLabel = computed(() => {
   if (loadingReport.value) return "產生中";
   if (errorMsg.value) return "發生錯誤";
@@ -17,7 +18,7 @@ const statusLabel = computed(() => {
   return "待命";
 });
 
-watch(symbol, () => {
+watch([symbol, startDate, endDate], () => {
   errorMsg.value = null;
   report.value = null;
 });
@@ -35,6 +36,16 @@ function fetchReport() {
     return;
   }
 
+  if (!startDate.value || !endDate.value) {
+    errorMsg.value = "請選擇開始日期與結束日期。";
+    return;
+  }
+
+  if (startDate.value > endDate.value) {
+    errorMsg.value = "開始日期不能晚於結束日期。";
+    return;
+  }
+
   symbol.value = code;
   return s.fetchreport();
 }
@@ -49,8 +60,8 @@ function fetchReport() {
             AI 技術分析
           </h1>
           <p class="mt-2 text-sm leading-relaxed text-slate-500">
-            輸入台股代號，呼叫 Python 後端產生技術分析報告。<br />
-            產生完成後會自動下載 Markdown，並在下方顯示預覽。
+            輸入台股代號與日期區間，優先使用資料庫 K 線產生技術分析報告。<br />
+            若資料庫缺資料，後端才會向 Shioaji 補抓並寫入資料庫。
           </p>
         </div>
 
@@ -80,10 +91,10 @@ function fetchReport() {
 
       <div class="mt-8 space-y-6">
         <div class="space-y-4">
-          <label class="block text-sm font-medium text-slate-700">股票代號</label>
+          <label class="block text-sm font-medium text-slate-700">查詢條件</label>
 
-          <div class="flex gap-3">
-            <div class="group relative flex-1">
+          <div class="grid gap-3 sm:grid-cols-3">
+            <div class="group relative">
               <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                 <span class="font-mono text-sm text-slate-400">TW.</span>
               </div>
@@ -98,49 +109,64 @@ function fetchReport() {
               />
             </div>
 
-            <button
-              type="button"
+            <input
+              v-model="startDate"
+              type="date"
               :disabled="loadingReport"
-              class="inline-flex shrink-0 items-center gap-2 rounded-xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-              @click="fetchReport"
-            >
-              <svg
-                v-if="loadingReport"
-                class="-ml-1 h-4 w-4 animate-spin text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  class="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  stroke-width="4"
-                />
-                <path
-                  class="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                />
-              </svg>
-              <svg
-                v-else
-                class="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                />
-              </svg>
-              {{ loadingReport ? "產生中..." : "產生報告" }}
-            </button>
+              class="block w-full rounded-xl border-0 px-4 py-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 transition-shadow duration-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 disabled:bg-slate-50 disabled:text-slate-500 sm:text-sm sm:leading-6"
+            />
+
+            <input
+              v-model="endDate"
+              type="date"
+              :disabled="loadingReport"
+              class="block w-full rounded-xl border-0 px-4 py-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 transition-shadow duration-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 disabled:bg-slate-50 disabled:text-slate-500 sm:text-sm sm:leading-6"
+              @keydown.enter="!loadingReport ? fetchReport() : null"
+            />
           </div>
+
+          <button
+            type="button"
+            :disabled="loadingReport"
+            class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="fetchReport"
+          >
+            <svg
+              v-if="loadingReport"
+              class="-ml-1 h-4 w-4 animate-spin text-white"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+              />
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
+            </svg>
+            <svg
+              v-else
+              class="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+              />
+            </svg>
+            {{ loadingReport ? "產生中..." : "產生報告" }}
+          </button>
         </div>
 
         <div v-if="errorMsg" class="flex gap-3 rounded-lg border border-red-100 bg-red-50 p-4">
@@ -178,18 +204,34 @@ function fetchReport() {
             </div>
             <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
               <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Report Length
+                Data Source
               </div>
               <div class="mt-1 font-mono text-lg font-bold text-slate-900">
-                {{ hasReport ? `${reportText.length} chars` : "-" }}
+                {{ dataSource }}
               </div>
             </div>
             <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
               <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Daily Saved
+                DB Rows
               </div>
               <div class="mt-1 font-mono text-lg font-bold text-slate-900">
-                {{ report?.daily_price_saved ?? "-" }}
+                {{ report?.db_rows_used ?? "-" }}
+              </div>
+            </div>
+            <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
+              <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
+                Shioaji Fetched
+              </div>
+              <div class="mt-1 font-mono text-lg font-bold text-slate-900">
+                {{ report?.shioaji_rows_fetched ?? "-" }}
+              </div>
+            </div>
+            <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
+              <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
+                Report Length
+              </div>
+              <div class="mt-1 font-mono text-lg font-bold text-slate-900">
+                {{ hasReport ? `${reportText.length} chars` : "-" }}
               </div>
             </div>
             <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
@@ -214,7 +256,7 @@ function fetchReport() {
           >{{ reportText }}</pre>
 
           <div v-else class="p-8 text-center text-sm text-slate-500">
-            尚未產生報告。輸入股票代號後按下「產生報告」開始。
+            尚未產生報告。輸入股票代號與日期區間後按下「產生報告」開始。
           </div>
         </div>
       </div>
