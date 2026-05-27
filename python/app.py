@@ -1,9 +1,9 @@
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 
+import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
 from sqlalchemy import text
 
 from database import SessionLocal
@@ -22,8 +22,10 @@ from shioaji_bridge import bridge
 
 
 DEFAULT_REPORT_DAYS = 30
-TIMEFRAME_1M = "1m"
 MIN_COMPLETE_1M_ROWS = 240
+TIMEFRAME_1M = "1m"
+TIMEFRAME_1D = "1d"
+TIMEFRAME_1W = "1w"
 
 
 @asynccontextmanager
@@ -67,27 +69,19 @@ def _parse_report_dates(start_date: str | None, end_date: str | None):
     return parsed_start, parsed_end, start_dt, end_exclusive
 
 
-def _weekday_dates(start: date, end: date):
-    dates = []
-    current = start
-
-    while current <= end:
-        if current.weekday() < 5:
-            dates.append(current)
-        current += timedelta(days=1)
-
-    return dates
-
-
 def _calendar_dates(start: date, end: date):
-    dates = []
     current = start
+    dates = []
 
     while current <= end:
         dates.append(current)
         current += timedelta(days=1)
 
     return dates
+
+
+def _weekday_dates(start: date, end: date):
+    return [d for d in _calendar_dates(start, end) if d.weekday() < 5]
 
 
 def _counts_by_date(df):
@@ -121,9 +115,6 @@ def _compact_date_ranges(dates: list[date]):
 
 
 def _fetch_required_weekday_ranges(db_df, start: date, end: date):
-    if db_df.empty:
-        return _compact_date_ranges(_weekday_dates(start, end))
-
     db_counts = _counts_by_date(db_df)
     fetch_dates = [
         d
@@ -184,18 +175,95 @@ def _build_data_coverage(start: date, end: date, db_df, final_df, fetched_frames
     return rows
 
 
+def _add_ma_columns(df):
+    enriched = df.copy()
+
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        enriched[col] = pd.to_numeric(enriched[col], errors="coerce").fillna(0)
+
+    enriched["MA5"] = enriched["Close"].rolling(5).mean().fillna(0)
+    enriched["MA20"] = enriched["Close"].rolling(20).mean().fillna(0)
+    enriched["MA60"] = enriched["Close"].rolling(60).mean().fillna(0)
+    return enriched
+
+
+def _aggregate_1m_to_1d(df_1m):
+    if df_1m is None or df_1m.empty:
+        return pd.DataFrame(columns=["ts", "Open", "High", "Low", "Close", "Volume"])
+
+    df = df_1m.copy()
+    df["ts"] = pd.to_datetime(df["ts"])
+    df = df.sort_values("ts")
+    df["trade_date"] = df["ts"].dt.normalize()
+
+    rows = []
+
+    for trade_date, daily in df.groupby("trade_date", sort=True):
+        rows.append({
+            "ts": trade_date,
+            "Open": float(daily.iloc[0]["Open"]),
+            "High": float(daily["High"].max()),
+            "Low": float(daily["Low"].min()),
+            "Close": float(daily.iloc[-1]["Close"]),
+            "Volume": int(daily["Volume"].sum()),
+        })
+
+    return _add_ma_columns(pd.DataFrame(rows))
+
+
+def _aggregate_1d_to_1w(df_1d):
+    if df_1d is None or df_1d.empty:
+        return pd.DataFrame(columns=["ts", "Open", "High", "Low", "Close", "Volume"])
+
+    df = df_1d.copy()
+    df["ts"] = pd.to_datetime(df["ts"])
+    df = df.sort_values("ts")
+    df["week_start"] = (df["ts"] - pd.to_timedelta(df["ts"].dt.weekday, unit="D")).dt.normalize()
+
+    rows = []
+
+    for week_start, weekly in df.groupby("week_start", sort=True):
+        rows.append({
+            "ts": week_start,
+            "Open": float(weekly.iloc[0]["Open"]),
+            "High": float(weekly["High"].max()),
+            "Low": float(weekly["Low"].min()),
+            "Close": float(weekly.iloc[-1]["Close"]),
+            "Volume": int(weekly["Volume"].sum()),
+        })
+
+    return _add_ma_columns(pd.DataFrame(rows))
+
+
+def _save_higher_timeframes(db, symbol: str, df_1m):
+    df_1d = _aggregate_1m_to_1d(df_1m)
+    df_1w = _aggregate_1d_to_1w(df_1d)
+
+    daily_1d = save_daily_price(db, symbol, df_1d, timeframe=TIMEFRAME_1D) if not df_1d.empty else 0
+    daily_1w = save_daily_price(db, symbol, df_1w, timeframe=TIMEFRAME_1W) if not df_1w.empty else 0
+    snapshot_1d = save_technical_snapshot(db, symbol, df_1d, timeframe=TIMEFRAME_1D) if not df_1d.empty else 0
+    snapshot_1w = save_technical_snapshot(db, symbol, df_1w, timeframe=TIMEFRAME_1W) if not df_1w.empty else 0
+
+    return {
+        "daily_price_1d_saved": daily_1d,
+        "daily_price_1w_saved": daily_1w,
+        "technical_snapshot_1d_saved": snapshot_1d,
+        "technical_snapshot_1w_saved": snapshot_1w,
+        "df_1d": df_1d,
+        "df_1w": df_1w,
+    }
+
+
 def _recent_rows(df, rows: int = 20):
     return (
         df.tail(rows)[["ts", "Open", "High", "Low", "Close", "Volume"]]
-        .rename(
-            columns={
-                "Open": "open",
-                "High": "high",
-                "Low": "low",
-                "Close": "close",
-                "Volume": "volume",
-            }
-        )
+        .rename(columns={
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume",
+        })
         .assign(ts=lambda data: data["ts"].astype(str))
         .to_dict(orient="records")
     )
@@ -214,17 +282,21 @@ def _get_db_debug_snapshot(db, symbol: str):
 
     daily_summary = db.execute(text("""
         SELECT
+            timeframe,
             COUNT(*) AS row_count,
             MIN(ts) AS first_ts,
             MAX(ts) AS latest_ts,
             MAX(created_at) AS latest_created_at
         FROM daily_price
         WHERE symbol = :symbol
-    """), {"symbol": target}).mappings().one()
+        GROUP BY timeframe
+        ORDER BY timeframe
+    """), {"symbol": target}).mappings().all()
 
     recent_daily = db.execute(text("""
         SELECT
             symbol,
+            timeframe,
             ts,
             open_price,
             high_price,
@@ -243,7 +315,8 @@ def _get_db_debug_snapshot(db, symbol: str):
             id,
             symbol,
             report_type,
-            source,
+            timeframe,
+            data_source,
             CHAR_LENGTH(report_markdown) AS report_length,
             created_at
         FROM ai_report
@@ -261,10 +334,7 @@ def _get_db_debug_snapshot(db, symbol: str):
             "mysql_now": str(db_info["mysql_now"]),
         },
         "daily_price": {
-            "row_count": int(daily_summary["row_count"] or 0),
-            "first_ts": str(daily_summary["first_ts"]) if daily_summary["first_ts"] else None,
-            "latest_ts": str(daily_summary["latest_ts"]) if daily_summary["latest_ts"] else None,
-            "latest_created_at": str(daily_summary["latest_created_at"]) if daily_summary["latest_created_at"] else None,
+            "summary_by_timeframe": [dict(row) for row in daily_summary],
             "recent_rows": [dict(row) for row in recent_daily],
         },
         "ai_report": {
@@ -282,7 +352,6 @@ def read_root():
 def get_account_stock_positions():
     try:
         rows = bridge.get_stock_positions()
-
         return {
             "success": True,
             "source": "shioaji",
@@ -290,7 +359,6 @@ def get_account_stock_positions():
             "symbols": [row["code"] for row in rows],
             "positions": rows,
         }
-
     except Exception as e:
         return {
             "success": False,
@@ -310,7 +378,6 @@ def get_kline_data(symbol: str):
 
         df_analyzed = add_indicators_v2(df)
         return df_analyzed.tail(100).to_dict(orient="records")
-
     except Exception as e:
         return {"error": str(e)}
 
@@ -349,7 +416,7 @@ def ai_report(code: str, start_date: str | None = None, end_date: str | None = N
 
     try:
         parsed_start, parsed_end, start_dt, end_exclusive = _parse_report_dates(start_date, end_date)
-        db_df = get_daily_price_df_between(db, code, start_dt, end_exclusive)
+        db_df = get_daily_price_df_between(db, code, start_dt, end_exclusive, timeframe=TIMEFRAME_1M)
         fetch_ranges = _fetch_required_weekday_ranges(db_df, parsed_start, parsed_end)
         fetched_frames = []
 
@@ -366,11 +433,11 @@ def ai_report(code: str, start_date: str | None = None, end_date: str | None = N
                 continue
 
             fetched_frames.append(fetched_df)
-            save_daily_price(db, code, fetched_df)
+            save_daily_price(db, code, fetched_df, timeframe=TIMEFRAME_1M)
 
         db.commit()
 
-        report_df = get_daily_price_df_between(db, code, start_dt, end_exclusive)
+        report_df = get_daily_price_df_between(db, code, start_dt, end_exclusive, timeframe=TIMEFRAME_1M)
 
         if report_df.empty:
             return {
@@ -382,18 +449,12 @@ def ai_report(code: str, start_date: str | None = None, end_date: str | None = N
             }
 
         analyzed_df = add_indicators_v2(report_df)
-        snapshot_count = save_technical_snapshot(db, code, analyzed_df)
-        data_coverage = _build_data_coverage(
-            parsed_start,
-            parsed_end,
-            db_df,
-            report_df,
-            fetched_frames,
-        )
+        snapshot_1m_count = save_technical_snapshot(db, code, analyzed_df, timeframe=TIMEFRAME_1M)
+        higher = _save_higher_timeframes(db, code, report_df)
+        data_coverage = _build_data_coverage(parsed_start, parsed_end, db_df, report_df, fetched_frames)
 
         initial_db_count = len(db_df)
         fetched_count = sum(len(frame) for frame in fetched_frames)
-        daily_count = fetched_count
 
         if fetched_count == 0:
             data_source = "database"
@@ -417,9 +478,19 @@ def ai_report(code: str, start_date: str | None = None, end_date: str | None = N
             end_date=parsed_end.isoformat(),
             data_source=data_source,
             data_coverage=data_coverage,
+            daily_ma_df=higher["df_1d"],
+            weekly_ma_df=higher["df_1w"],
         )
 
-        report_id = save_ai_report(db, code, md, source=data_source)
+        report_id = save_ai_report(
+            db,
+            code,
+            md,
+            source=data_source,
+            start_date=parsed_start.isoformat(),
+            end_date=parsed_end.isoformat(),
+            timeframe=TIMEFRAME_1M,
+        )
 
         db.commit()
         db_snapshot = _get_db_debug_snapshot(db, code)
@@ -429,8 +500,12 @@ def ai_report(code: str, start_date: str | None = None, end_date: str | None = N
             "report": md,
             "saved": True,
             "report_id": report_id,
-            "daily_price_saved": daily_count,
-            "technical_snapshot_saved": snapshot_count,
+            "daily_price_saved": fetched_count,
+            "technical_snapshot_saved": snapshot_1m_count,
+            "technical_snapshot_1d_saved": higher["technical_snapshot_1d_saved"],
+            "technical_snapshot_1w_saved": higher["technical_snapshot_1w_saved"],
+            "daily_price_1d_saved": higher["daily_price_1d_saved"],
+            "daily_price_1w_saved": higher["daily_price_1w_saved"],
             "source": data_source,
             "data_source": data_source,
             "start_date": parsed_start.isoformat(),
@@ -442,17 +517,14 @@ def ai_report(code: str, start_date: str | None = None, end_date: str | None = N
             "data_coverage": data_coverage,
             "db": db_snapshot,
         }
-
     except Exception as e:
         db.rollback()
         print("AI report error:", e)
-
         return {
             "code": code,
             "error": str(e),
             "saved": False,
         }
-
     finally:
         db.close()
 
@@ -493,7 +565,7 @@ def get_ai_payload(symbol: str):
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else latest
 
-        payload = {
+        return {
             "symbol": symbol,
             "as_of": str(latest["ts"]),
             "latest": {
@@ -554,9 +626,6 @@ def get_ai_payload(symbol: str):
             },
             "recent_rows": _recent_rows(df, rows=20),
         }
-
-        return payload
-
     except Exception as e:
         return {"error": str(e), "symbol": symbol}
 
@@ -581,8 +650,9 @@ def sync_stock_data(symbol: str):
         df_analyzed = add_indicators_v2(df)
 
         save_stock(db, symbol=symbol)
-        daily_count = save_daily_price(db, symbol, df_analyzed)
-        snapshot_count = save_technical_snapshot(db, symbol, df_analyzed)
+        daily_count = save_daily_price(db, symbol, df_analyzed, timeframe=TIMEFRAME_1M)
+        snapshot_count = save_technical_snapshot(db, symbol, df_analyzed, timeframe=TIMEFRAME_1M)
+        higher = _save_higher_timeframes(db, symbol, df)
 
         db.commit()
 
@@ -591,70 +661,67 @@ def sync_stock_data(symbol: str):
             "symbol": symbol,
             "daily_price_saved": daily_count,
             "technical_snapshot_saved": snapshot_count,
+            "daily_price_1d_saved": higher["daily_price_1d_saved"],
+            "daily_price_1w_saved": higher["daily_price_1w_saved"],
+            "technical_snapshot_1d_saved": higher["technical_snapshot_1d_saved"],
+            "technical_snapshot_1w_saved": higher["technical_snapshot_1w_saved"],
         }
-
     except Exception as e:
         db.rollback()
-
         return {
             "success": False,
             "symbol": symbol,
             "error": str(e),
         }
-
     finally:
         db.close()
 
 
 @app.get("/api/db/kline/{symbol}")
-def get_kline_from_db(symbol: str, days: int = 7):
+def get_kline_from_db(symbol: str, days: int = 7, timeframe: str = TIMEFRAME_1M):
     symbol = symbol.strip()
-
     db = SessionLocal()
 
     try:
-        rows = get_recent_daily_price(db, symbol, days)
-
+        rows = get_recent_daily_price(db, symbol, days, timeframe=timeframe)
         return {
             "success": True,
             "symbol": symbol,
+            "timeframe": timeframe,
             "source": "database",
             "days": days,
             "count": len(rows),
             "rows": rows,
         }
-
     except Exception as e:
         print("Failed to read kline data from database:", e)
-
         return {
             "success": False,
             "symbol": symbol,
+            "timeframe": timeframe,
             "source": "database",
             "error": str(e),
         }
-
     finally:
         db.close()
 
 
 @app.get("/api/test/db-kline/{symbol}")
-def test_db_kline(symbol: str, start: str, end: str):
+def test_db_kline(symbol: str, start: str, end: str, timeframe: str = TIMEFRAME_1M):
     db = SessionLocal()
 
     try:
-        rows = get_daily_price_between(db, symbol, start, end)
-
+        rows = get_daily_price_between(db, symbol, start, end, timeframe=timeframe)
         return {
             "success": True,
             "symbol": symbol,
+            "timeframe": timeframe,
             "start": start,
             "end": end,
             "count": len(rows),
             "first_ts": str(rows[0]["ts"]) if rows else None,
             "last_ts": str(rows[-1]["ts"]) if rows else None,
         }
-
     finally:
         db.close()
 

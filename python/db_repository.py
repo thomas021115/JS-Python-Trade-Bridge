@@ -9,19 +9,28 @@ def save_ai_report(
     report_markdown: str,
     report_type: str = "technical_mvp",
     source: str = "shioaji",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    timeframe: str = "1m",
 ):
     sql = text("""
         INSERT INTO ai_report (
             symbol,
             report_type,
             report_markdown,
-            source
+            start_date,
+            end_date,
+            timeframe,
+            data_source
         )
         VALUES (
             :symbol,
             :report_type,
             :report_markdown,
-            :source
+            :start_date,
+            :end_date,
+            :timeframe,
+            :data_source
         )
     """)
 
@@ -29,7 +38,10 @@ def save_ai_report(
         "symbol": symbol,
         "report_type": report_type,
         "report_markdown": report_markdown,
-        "source": source,
+        "start_date": start_date,
+        "end_date": end_date,
+        "timeframe": timeframe,
+        "data_source": source,
     })
 
     return result.lastrowid
@@ -50,10 +62,11 @@ def save_stock(db, symbol: str, name: str | None = None, market: str | None = No
     })
 
 
-def save_daily_price(db, symbol: str, df):
+def save_daily_price(db, symbol: str, df, timeframe: str = "1m"):
     sql = text("""
         INSERT INTO daily_price (
             symbol,
+            timeframe,
             ts,
             open_price,
             high_price,
@@ -63,6 +76,7 @@ def save_daily_price(db, symbol: str, df):
         )
         VALUES (
             :symbol,
+            :timeframe,
             :ts,
             :open_price,
             :high_price,
@@ -71,6 +85,7 @@ def save_daily_price(db, symbol: str, df):
             :volume
         )
         ON DUPLICATE KEY UPDATE
+            timeframe = VALUES(timeframe),
             open_price = VALUES(open_price),
             high_price = VALUES(high_price),
             low_price = VALUES(low_price),
@@ -83,6 +98,7 @@ def save_daily_price(db, symbol: str, df):
     for _, row in df.iterrows():
         db.execute(sql, {
             "symbol": symbol,
+            "timeframe": timeframe,
             "ts": row["ts"],
             "open_price": float(row["Open"]),
             "high_price": float(row["High"]),
@@ -95,10 +111,15 @@ def save_daily_price(db, symbol: str, df):
     return count
 
 
-def save_technical_snapshot(db, symbol: str, df):
+def _float_value(row, key: str):
+    return float(row[key]) if key in row else 0.0
+
+
+def save_technical_snapshot(db, symbol: str, df, timeframe: str = "1m"):
     sql = text("""
         INSERT INTO technical_snapshot (
             symbol,
+            timeframe,
             ts,
             ma5,
             ma20,
@@ -129,6 +150,7 @@ def save_technical_snapshot(db, symbol: str, df):
         )
         VALUES (
             :symbol,
+            :timeframe,
             :ts,
             :ma5,
             :ma20,
@@ -158,6 +180,7 @@ def save_technical_snapshot(db, symbol: str, df):
             :resist_3
         )
         ON DUPLICATE KEY UPDATE
+            timeframe = VALUES(timeframe),
             ma5 = VALUES(ma5),
             ma20 = VALUES(ma20),
             ma60 = VALUES(ma60),
@@ -191,44 +214,46 @@ def save_technical_snapshot(db, symbol: str, df):
     for _, row in df.iterrows():
         db.execute(sql, {
             "symbol": symbol,
+            "timeframe": timeframe,
             "ts": row["ts"],
-            "ma5": float(row["MA5"]),
-            "ma20": float(row["MA20"]),
-            "ma60": float(row["MA60"]),
-            "ma120": float(row["MA120"]),
-            "ema12": float(row["EMA12"]),
-            "ema26": float(row["EMA26"]),
-            "rsi14": float(row["RSI"]),
-            "macd": float(row["MACD"]),
-            "macd_signal": float(row["MACD_SIGNAL"]),
-            "macd_hist": float(row["MACD_HIST"]),
-            "k_value": float(row["K"]),
-            "d_value": float(row["D"]),
-            "cci20": float(row["CCI"]),
-            "atr14": float(row["ATR14"]),
-            "bb_mid": float(row["BB_MID"]),
-            "bb_upper": float(row["BB_UPPER"]),
-            "bb_lower": float(row["BB_LOWER"]),
-            "bb_width": float(row["BB_WIDTH"]),
-            "vol_ma5": float(row["VOL_MA5"]),
-            "vol_ma20": float(row["VOL_MA20"]),
-            "support_1": float(row["SUPPORT_1"]),
-            "support_2": float(row["SUPPORT_2"]),
-            "support_3": float(row["SUPPORT_3"]),
-            "resist_1": float(row["RESIST_1"]),
-            "resist_2": float(row["RESIST_2"]),
-            "resist_3": float(row["RESIST_3"]),
+            "ma5": _float_value(row, "MA5"),
+            "ma20": _float_value(row, "MA20"),
+            "ma60": _float_value(row, "MA60"),
+            "ma120": _float_value(row, "MA120"),
+            "ema12": _float_value(row, "EMA12"),
+            "ema26": _float_value(row, "EMA26"),
+            "rsi14": _float_value(row, "RSI"),
+            "macd": _float_value(row, "MACD"),
+            "macd_signal": _float_value(row, "MACD_SIGNAL"),
+            "macd_hist": _float_value(row, "MACD_HIST"),
+            "k_value": _float_value(row, "K"),
+            "d_value": _float_value(row, "D"),
+            "cci20": _float_value(row, "CCI"),
+            "atr14": _float_value(row, "ATR14"),
+            "bb_mid": _float_value(row, "BB_MID"),
+            "bb_upper": _float_value(row, "BB_UPPER"),
+            "bb_lower": _float_value(row, "BB_LOWER"),
+            "bb_width": _float_value(row, "BB_WIDTH"),
+            "vol_ma5": _float_value(row, "VOL_MA5"),
+            "vol_ma20": _float_value(row, "VOL_MA20"),
+            "support_1": _float_value(row, "SUPPORT_1"),
+            "support_2": _float_value(row, "SUPPORT_2"),
+            "support_3": _float_value(row, "SUPPORT_3"),
+            "resist_1": _float_value(row, "RESIST_1"),
+            "resist_2": _float_value(row, "RESIST_2"),
+            "resist_3": _float_value(row, "RESIST_3"),
         })
         count += 1
 
     return count
 
-def get_recent_daily_price(db, symbol: str, days: int = 7):
+def get_recent_daily_price(db, symbol: str, days: int = 7, timeframe: str = "1m"):
     start_time = datetime.now() - timedelta(days=days)
 
     sql = text("""
         SELECT
             symbol,
+            timeframe,
             ts,
             open_price,
             high_price,
@@ -237,12 +262,14 @@ def get_recent_daily_price(db, symbol: str, days: int = 7):
             volume
         FROM daily_price
         WHERE symbol = :symbol
+          AND timeframe = :timeframe
           AND ts >= :start_time
         ORDER BY ts ASC
     """)
 
     result = db.execute(sql, {
         "symbol": symbol,
+        "timeframe": timeframe,
         "start_time": start_time
     })
 
@@ -253,6 +280,7 @@ def get_recent_daily_price(db, symbol: str, days: int = 7):
 
         rows.append({
             "symbol": data["symbol"],
+            "timeframe": data["timeframe"],
             "ts": data["ts"].isoformat(),
             "open": float(data["open_price"]),
             "high": float(data["high_price"]),
@@ -263,10 +291,11 @@ def get_recent_daily_price(db, symbol: str, days: int = 7):
 
     return rows
 
-def get_daily_price_between(db, symbol: str, start_time, end_time):
+def get_daily_price_between(db, symbol: str, start_time, end_time, timeframe: str = "1m"):
     sql = text("""
         SELECT
             symbol,
+            timeframe,
             ts,
             open_price,
             high_price,
@@ -275,6 +304,7 @@ def get_daily_price_between(db, symbol: str, start_time, end_time):
             volume
         FROM daily_price
         WHERE symbol = :symbol
+          AND timeframe = :timeframe
           AND ts >= :start_time
           AND ts < :end_time
         ORDER BY ts ASC
@@ -282,6 +312,7 @@ def get_daily_price_between(db, symbol: str, start_time, end_time):
 
     result = db.execute(sql, {
         "symbol": symbol,
+        "timeframe": timeframe,
         "start_time": start_time,
         "end_time": end_time,
     })
@@ -294,8 +325,8 @@ def get_daily_price_between(db, symbol: str, start_time, end_time):
     return rows
 
 
-def get_daily_price_df_between(db, symbol: str, start_time, end_time):
-    rows = get_daily_price_between(db, symbol, start_time, end_time)
+def get_daily_price_df_between(db, symbol: str, start_time, end_time, timeframe: str = "1m"):
+    rows = get_daily_price_between(db, symbol, start_time, end_time, timeframe=timeframe)
     return daily_price_rows_to_df(rows)
 
 

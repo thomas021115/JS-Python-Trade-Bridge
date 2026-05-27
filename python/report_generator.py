@@ -145,6 +145,34 @@ def _format_indicator_snapshot(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def _format_ma_table(df: pd.DataFrame | None, timeframe: str) -> str:
+    if df is None or df.empty:
+        return f"目前沒有 {timeframe} MA 資料。"
+
+    prepared = _prepare_df(df)
+    lines = [
+        "| 時間 | 開盤 | 最高 | 最低 | 收盤 | 量 | MA5 | MA20 | MA60 |",
+        "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+
+    for _, row in prepared.iterrows():
+        lines.append(
+            "| {ts} | {open} | {high} | {low} | {close} | {volume} | {ma5} | {ma20} | {ma60} |".format(
+                ts=row["ts"],
+                open=_num(row["Open"]),
+                high=_num(row["High"]),
+                low=_num(row["Low"]),
+                close=_num(row["Close"]),
+                volume=int(_num(row["Volume"], 0)),
+                ma5=_num(row.get("MA5")),
+                ma20=_num(row.get("MA20")),
+                ma60=_num(row.get("MA60")),
+            )
+        )
+
+    return "\n".join(lines)
+
+
 def _format_levels(df: pd.DataFrame) -> str:
     last = df.iloc[-1]
     return "\n".join([
@@ -194,6 +222,8 @@ def generate_ai_markdown(
     end_date: str | None = None,
     data_source: str | None = None,
     data_coverage: list[dict[str, Any]] | None = None,
+    daily_ma_df: pd.DataFrame | None = None,
+    weekly_ma_df: pd.DataFrame | None = None,
 ) -> str:
     coverage_table = _format_coverage_rows(data_coverage)
     date_range = f"{start_date or '-'} ~ {end_date or '-'}"
@@ -232,12 +262,18 @@ def generate_ai_markdown(
 ## 3. 每日 OHLCV 摘要
 {_format_daily_ohlcv_summary(prepared)}
 
-## 4. 技術指標快照
+## 4. 1m 技術指標快照
 {_format_indicator_snapshot(prepared)}
 
-## 5. 支撐與壓力
+## 5. 日 K MA5 / MA20 / MA60
+{_format_ma_table(daily_ma_df, "1d")}
+
+## 6. 週 K MA5 / MA20 / MA60
+{_format_ma_table(weekly_ma_df, "1w")}
+
+## 7. 支撐與壓力
 {_format_levels(prepared)}
 
-## 6. 每日 1 分 K 線樣本
+## 8. 每日 1 分 K 線樣本
 {_format_one_minute_rows(prepared)}
 """
