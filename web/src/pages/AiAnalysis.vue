@@ -1,269 +1,313 @@
 <script setup lang="ts">
-import { computed, watch } from "vue";
-import { storeToRefs } from "pinia";
-import PageShell from "@/components/layout/PageShell.vue";
-import AppCard from "@/components/ui/AppCard.vue";
-import { useReport } from "@/stores/report";
+import { computed, watch } from 'vue';
+import { storeToRefs } from 'pinia';
+import PageShell from '@/components/layout/PageShell.vue';
+import AppCard from '@/components/ui/AppCard.vue';
+import { useReport } from '@/stores/report';
 
 const s = useReport();
-const { symbol, startDate, endDate, report, loadingReport, errorMsg } = storeToRefs(s);
+const {
+  symbol,
+  startDate,
+  endDate,
+  report,
+  loadingReport,
+  errorMsg,
+  syncing,
+  syncResult,
+  syncErrorMsg,
+} = storeToRefs(s);
 
-const reportText = computed(() => report.value?.report?.trim() ?? "");
+const reportText = computed(() => report.value?.report?.trim() ?? '');
 const hasReport = computed(() => reportText.value.length > 0);
-const dataSource = computed(() => report.value?.data_source ?? report.value?.source ?? "-");
+const dataSource = computed(() => report.value?.data_source ?? report.value?.source ?? '-');
+const isBusy = computed(() => loadingReport.value || syncing.value);
+const dataQualityWarning = computed(() => Boolean(report.value?.data_quality_warning));
+const dataQualityMessage = computed(() => report.value?.message ?? '資料不足，請先同步資料');
 const statusLabel = computed(() => {
-  if (loadingReport.value) return "產生中";
-  if (errorMsg.value) return "發生錯誤";
-  if (hasReport.value) return "已完成";
-  return "待命";
+  if (syncing.value) return '同步中';
+  if (loadingReport.value) return '產生中';
+  if (errorMsg.value || syncErrorMsg.value) return '需要確認';
+  if (hasReport.value) return '資料包完成';
+  return '待命';
 });
+const statusTone = computed(() => {
+  if (syncing.value || loadingReport.value) return 'border-sky-300/40 bg-sky-400/10 text-sky-200';
+  if (errorMsg.value || syncErrorMsg.value) return 'border-rose-300/40 bg-rose-400/10 text-rose-200';
+  if (hasReport.value) return 'border-emerald-300/40 bg-emerald-400/10 text-emerald-200';
+  return 'border-amber-300/30 bg-amber-300/10 text-amber-100';
+});
+const syncStats = computed(() => [
+  ['Fetched Rows', syncResult.value?.fetched_rows],
+  ['Saved 1m Rows', syncResult.value?.saved_1m_rows],
+  ['Saved 1d Rows', syncResult.value?.saved_1d_rows],
+  ['Saved 1w Rows', syncResult.value?.saved_1w_rows],
+  ['Snapshot 1d', syncResult.value?.technical_snapshot_1d_saved],
+  ['Snapshot 1w', syncResult.value?.technical_snapshot_1w_saved],
+  ['Elapsed Seconds', syncResult.value?.elapsed_seconds],
+]);
 
 watch([symbol, startDate, endDate], () => {
   errorMsg.value = null;
+  syncErrorMsg.value = null;
   report.value = null;
+  syncResult.value = null;
 });
 
-function fetchReport() {
+function validateForm(target: 'report' | 'sync') {
   const code = symbol.value.trim();
+  let message = '';
 
   if (!code) {
-    errorMsg.value = "請先輸入股票代號。";
-    return;
+    message = '請輸入股票代號';
+  } else if (!/^\d{4,6}$/.test(code)) {
+    message = '股票代號格式不正確，請輸入 4 到 6 位數字';
+  } else if (!startDate.value || !endDate.value) {
+    message = '請選擇開始日期與結束日期';
+  } else if (startDate.value > endDate.value) {
+    message = '開始日期不能晚於結束日期';
   }
 
-  if (!/^\d{4,6}$/.test(code)) {
-    errorMsg.value = "股票代號格式看起來不正確，請輸入 4 到 6 位數字。";
-    return;
-  }
-
-  if (!startDate.value || !endDate.value) {
-    errorMsg.value = "請選擇開始日期與結束日期。";
-    return;
-  }
-
-  if (startDate.value > endDate.value) {
-    errorMsg.value = "開始日期不能晚於結束日期。";
-    return;
+  if (message) {
+    if (target === 'sync') {
+      syncErrorMsg.value = message;
+    } else {
+      errorMsg.value = message;
+    }
+    return false;
   }
 
   symbol.value = code;
+  return true;
+}
+
+function fetchReport() {
+  if (!validateForm('report')) return;
   return s.fetchreport();
+}
+
+function syncData() {
+  if (!validateForm('sync')) return;
+  return s.syncData();
 }
 </script>
 
 <template>
-  <PageShell variant="center">
-    <AppCard>
-      <div class="flex items-start justify-between gap-4">
+  <PageShell theme="aurum" variant="wide" outer-class="py-8 sm:py-12">
+    <AppCard tone="aurum">
+      <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h1 class="text-2xl font-bold tracking-tight text-slate-900">
-            AI 技術分析
+          <p class="text-xs font-semibold uppercase tracking-[0.28em] text-amber-200/70">
+            AI Research Packet
+          </p>
+          <h1 class="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl">
+            AI 技術分析資料包
           </h1>
-          <p class="mt-2 text-sm leading-relaxed text-slate-500">
-            輸入台股代號與日期區間，優先使用資料庫 K 線產生技術分析報告。<br />
-            若資料庫缺資料，後端才會向 Shioaji 補抓並寫入資料庫。
+          <p class="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
+            先同步指定區間資料，再從資料庫產生 Markdown 資料包。同步資料會呼叫 Shioaji，建議盤後或短區間使用，單次最多 30 天。
           </p>
         </div>
 
-        <span
-          class="inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors duration-300"
-          :class="
-            loadingReport
-              ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-600/20'
-              : errorMsg
-                ? 'bg-red-50 text-red-700 ring-1 ring-red-600/20'
-                : 'bg-slate-100 text-slate-600 ring-1 ring-slate-500/10'
-          "
+        <div
+          class="inline-flex w-fit items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold"
+          :class="statusTone"
         >
-          <span class="relative flex h-2 w-2">
-            <span
-              v-if="loadingReport"
-              class="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75"
-            />
-            <span
-              class="relative inline-flex h-2 w-2 rounded-full"
-              :class="loadingReport ? 'bg-blue-500' : errorMsg ? 'bg-red-500' : 'bg-slate-400'"
-            />
-          </span>
+          <span
+            class="h-2 w-2 rounded-full"
+            :class="syncing || loadingReport ? 'animate-pulse bg-sky-300' : 'bg-amber-200'"
+          />
           {{ statusLabel }}
-        </span>
+        </div>
       </div>
 
-      <div class="mt-8 space-y-6">
-        <div class="space-y-4">
-          <label class="block text-sm font-medium text-slate-700">查詢條件</label>
-
-          <div class="grid gap-3 sm:grid-cols-3">
-            <div class="group relative">
-              <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                <span class="font-mono text-sm text-slate-400">TW.</span>
-              </div>
-              <input
-                v-model.trim="symbol"
-                type="text"
-                inputmode="numeric"
-                placeholder="2330"
-                :disabled="loadingReport"
-                @keydown.enter="!loadingReport ? fetchReport() : null"
-                class="block w-full rounded-xl border-0 py-3 pl-12 pr-4 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 transition-shadow duration-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 disabled:bg-slate-50 disabled:text-slate-500 sm:text-sm sm:leading-6"
-              />
+      <div class="mt-8 grid gap-6 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+        <section class="rounded-xl border border-amber-300/20 bg-slate-950/70 p-5 shadow-lg shadow-black/20">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="text-sm font-semibold text-white">查詢條件</h2>
+              <p class="mt-1 text-xs text-slate-400">股票代號與資料區間</p>
             </div>
-
-            <input
-              v-model="startDate"
-              type="date"
-              :disabled="loadingReport"
-              class="block w-full rounded-xl border-0 px-4 py-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 transition-shadow duration-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 disabled:bg-slate-50 disabled:text-slate-500 sm:text-sm sm:leading-6"
-            />
-
-            <input
-              v-model="endDate"
-              type="date"
-              :disabled="loadingReport"
-              class="block w-full rounded-xl border-0 px-4 py-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 transition-shadow duration-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 disabled:bg-slate-50 disabled:text-slate-500 sm:text-sm sm:leading-6"
-              @keydown.enter="!loadingReport ? fetchReport() : null"
-            />
+            <span class="font-mono text-xs text-amber-200/80">TWSE</span>
           </div>
 
-          <button
-            type="button"
-            :disabled="loadingReport"
-            class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:bg-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-            @click="fetchReport"
+          <div class="mt-5 space-y-4">
+            <label class="block text-xs font-medium uppercase tracking-wider text-slate-400">
+              股票代號
+              <div class="group relative mt-2">
+                <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <span class="font-mono text-sm text-amber-200/70">TW.</span>
+                </div>
+                <input
+                  v-model.trim="symbol"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="2330"
+                  :disabled="isBusy"
+                  class="block w-full rounded-lg border border-slate-700 bg-slate-900/90 py-3 pl-12 pr-4 font-mono text-sm text-white shadow-inner outline-none transition placeholder:text-slate-600 focus:border-amber-300 focus:ring-2 focus:ring-amber-300/25 disabled:cursor-not-allowed disabled:opacity-50"
+                  @keydown.enter="!isBusy ? fetchReport() : null"
+                />
+              </div>
+            </label>
+
+            <div class="grid gap-3 sm:grid-cols-2">
+              <label class="block text-xs font-medium uppercase tracking-wider text-slate-400">
+                開始日期
+                <input
+                  v-model="startDate"
+                  type="date"
+                  :disabled="isBusy"
+                  class="mt-2 block w-full rounded-lg border border-slate-700 bg-slate-900/90 px-4 py-3 font-mono text-sm text-white outline-none transition focus:border-amber-300 focus:ring-2 focus:ring-amber-300/25 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              </label>
+
+              <label class="block text-xs font-medium uppercase tracking-wider text-slate-400">
+                結束日期
+                <input
+                  v-model="endDate"
+                  type="date"
+                  :disabled="isBusy"
+                  class="mt-2 block w-full rounded-lg border border-slate-700 bg-slate-900/90 px-4 py-3 font-mono text-sm text-white outline-none transition focus:border-amber-300 focus:ring-2 focus:ring-amber-300/25 disabled:cursor-not-allowed disabled:opacity-50"
+                  @keydown.enter="!isBusy ? fetchReport() : null"
+                />
+              </label>
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                :disabled="isBusy"
+                class="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-amber-300 to-yellow-500 px-5 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-950/30 transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+                @click="fetchReport"
+              >
+                <span
+                  v-if="loadingReport"
+                  class="h-4 w-4 animate-spin rounded-full border-2 border-slate-950/30 border-t-slate-950"
+                />
+                <span v-else class="font-mono">MD</span>
+                {{ loadingReport ? '產生中...' : '產生資料包' }}
+              </button>
+
+              <button
+                type="button"
+                :disabled="isBusy"
+                class="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300/45 bg-slate-950 px-5 py-3 text-sm font-semibold text-amber-100 shadow-lg shadow-black/20 transition hover:border-amber-200 hover:bg-amber-300/10 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+                @click="syncData"
+              >
+                <span
+                  v-if="syncing"
+                  class="h-4 w-4 animate-spin rounded-full border-2 border-amber-200/30 border-t-amber-200"
+                />
+                <span v-else class="font-mono">SYNC</span>
+                {{ syncing ? '同步中...' : '同步資料' }}
+              </button>
+            </div>
+          </div>
+
+          <div
+            v-if="dataQualityWarning"
+            class="mt-5 rounded-lg border border-amber-300/35 bg-amber-300/10 p-4 text-sm text-amber-100"
           >
-            <svg
-              v-if="loadingReport"
-              class="-ml-1 h-4 w-4 animate-spin text-white"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                class="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                stroke-width="4"
-              />
-              <path
-                class="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-              />
-            </svg>
-            <svg
-              v-else
-              class="h-4 w-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-              />
-            </svg>
-            {{ loadingReport ? "產生中..." : "產生報告" }}
-          </button>
-        </div>
-
-        <div v-if="errorMsg" class="flex gap-3 rounded-lg border border-red-100 bg-red-50 p-4">
-          <div class="shrink-0 text-red-500">
-            <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path
-                fill-rule="evenodd"
-                d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
-                clip-rule="evenodd"
-              />
-            </svg>
-          </div>
-          <div class="text-sm text-red-700">
-            <h3 class="font-medium">無法產生報告</h3>
-            <p class="mt-1 opacity-90">{{ errorMsg }}</p>
-          </div>
-        </div>
-
-        <div class="rounded-xl bg-slate-50/50 p-5 ring-1 ring-slate-200">
-          <div class="mb-4 flex items-center justify-between">
-            <h3 class="text-sm font-semibold text-slate-900">執行狀態</h3>
-            <span class="font-mono text-xs text-slate-500">
-              {{ hasReport ? "SUCCESS" : "IDLE" }}
-            </span>
+            <div class="font-semibold">資料不足，請先同步資料</div>
+            <p class="mt-1 text-amber-100/80">{{ dataQualityMessage }}</p>
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
-            <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
-              <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Target
-              </div>
-              <div class="mt-1 font-mono text-lg font-bold text-slate-900">
-                {{ symbol || "-" }}
-              </div>
-            </div>
-            <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
-              <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Data Source
-              </div>
-              <div class="mt-1 font-mono text-lg font-bold text-slate-900">
-                {{ dataSource }}
-              </div>
-            </div>
-            <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
-              <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
-                DB Rows
-              </div>
-              <div class="mt-1 font-mono text-lg font-bold text-slate-900">
-                {{ report?.db_rows_used ?? "-" }}
-              </div>
-            </div>
-            <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
-              <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Shioaji Fetched
-              </div>
-              <div class="mt-1 font-mono text-lg font-bold text-slate-900">
-                {{ report?.shioaji_rows_fetched ?? "-" }}
-              </div>
-            </div>
-            <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
-              <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Report Length
-              </div>
-              <div class="mt-1 font-mono text-lg font-bold text-slate-900">
-                {{ hasReport ? `${reportText.length} chars` : "-" }}
-              </div>
-            </div>
-            <div class="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-100">
-              <div class="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Report ID
-              </div>
-              <div class="mt-1 font-mono text-lg font-bold text-slate-900">
-                {{ report?.report_id ?? "-" }}
-              </div>
-            </div>
+          <div
+            v-if="errorMsg || syncErrorMsg"
+            class="mt-5 rounded-lg border border-rose-300/35 bg-rose-400/10 p-4 text-sm text-rose-100"
+          >
+            <div class="font-semibold">操作未完成</div>
+            <p class="mt-1 text-rose-100/80">{{ errorMsg || syncErrorMsg }}</p>
           </div>
-        </div>
+        </section>
 
-        <div class="overflow-hidden rounded-xl bg-white ring-1 ring-slate-200">
-          <div class="border-b border-slate-100 px-5 py-3">
-            <h3 class="text-sm font-semibold text-slate-900">報告預覽</h3>
+        <section class="grid gap-4 sm:grid-cols-2">
+          <div class="rounded-xl border border-amber-300/20 bg-black/35 p-4 shadow-lg shadow-black/20">
+            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Target</div>
+            <div class="mt-2 font-mono text-2xl font-bold text-amber-200">{{ symbol || '-' }}</div>
           </div>
 
-          <pre
-            v-if="hasReport"
-            class="max-h-[520px] overflow-auto whitespace-pre-wrap break-words p-5 text-sm leading-7 text-slate-700"
-          >{{ reportText }}</pre>
-
-          <div v-else class="p-8 text-center text-sm text-slate-500">
-            尚未產生報告。輸入股票代號與日期區間後按下「產生報告」開始。
+          <div class="rounded-xl border border-amber-300/20 bg-black/35 p-4 shadow-lg shadow-black/20">
+            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Data Source</div>
+            <div class="mt-2 font-mono text-2xl font-bold text-amber-200">{{ dataSource }}</div>
           </div>
-        </div>
+
+          <div class="rounded-xl border border-slate-700 bg-black/35 p-4 shadow-lg shadow-black/20">
+            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">DB Rows</div>
+            <div class="mt-2 font-mono text-2xl font-bold text-white">{{ report?.db_rows_used ?? '-' }}</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-700 bg-black/35 p-4 shadow-lg shadow-black/20">
+            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Report ID</div>
+            <div class="mt-2 font-mono text-2xl font-bold text-white">{{ report?.report_id ?? '-' }}</div>
+          </div>
+
+          <div class="rounded-xl border border-slate-700 bg-black/35 p-4 shadow-lg shadow-black/20">
+            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Report Length</div>
+            <div class="mt-2 font-mono text-2xl font-bold text-white">
+              {{ hasReport ? `${reportText.length} chars` : '-' }}
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-slate-700 bg-black/35 p-4 shadow-lg shadow-black/20">
+            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Sync Status</div>
+            <div class="mt-2 font-mono text-2xl font-bold" :class="syncResult?.success ? 'text-emerald-200' : 'text-white'">
+              {{ syncResult ? (syncResult.success ? 'SUCCESS' : 'FAILED') : '-' }}
+            </div>
+          </div>
+        </section>
       </div>
 
-      <div class="mt-6 border-t border-slate-100 pt-6 text-center">
-        <p class="text-xs text-slate-400">
-          JS-Python-Trade-Bridge v1.0 - Powered by FastAPI & Vue 3
+      <section
+        v-if="syncResult"
+        class="mt-6 rounded-xl border border-amber-300/20 bg-slate-950/70 p-5 shadow-lg shadow-black/20"
+      >
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 class="text-sm font-semibold text-white">同步結果</h2>
+            <p class="mt-1 text-xs text-slate-400">
+              {{ syncResult.start_date ?? startDate }} ~ {{ syncResult.end_date ?? endDate }}
+            </p>
+          </div>
+          <span class="font-mono text-xs text-amber-200/80">
+            {{ syncResult.elapsed_seconds ?? '-' }}s
+          </span>
+        </div>
+
+        <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div
+            v-for="[label, value] in syncStats"
+            :key="label"
+            class="rounded-lg border border-slate-700 bg-black/40 p-3"
+          >
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              {{ label }}
+            </div>
+            <div class="mt-1 font-mono text-xl font-bold text-amber-200">
+              {{ value ?? '-' }}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="mt-6 overflow-hidden rounded-xl border border-amber-300/20 bg-slate-950/80 shadow-lg shadow-black/20">
+        <div class="flex items-center justify-between border-b border-amber-300/10 px-5 py-3">
+          <h2 class="text-sm font-semibold text-white">Markdown 預覽</h2>
+          <span class="font-mono text-xs text-slate-500">{{ hasReport ? 'READY' : 'EMPTY' }}</span>
+        </div>
+
+        <pre
+          v-if="hasReport"
+          class="max-h-[560px] overflow-auto whitespace-pre-wrap break-words p-5 font-mono text-sm leading-7 text-slate-200"
+        >{{ reportText }}</pre>
+
+        <div v-else class="p-10 text-center text-sm text-slate-500">
+          尚未產生資料包。先同步資料或直接從 DB 產生 Markdown。
+        </div>
+      </section>
+
+      <div class="mt-6 border-t border-amber-300/10 pt-5 text-center">
+        <p class="text-xs text-slate-500">
+          JS-Python-Trade-Bridge v1.0 - FastAPI / Vue 3
         </p>
       </div>
     </AppCard>
