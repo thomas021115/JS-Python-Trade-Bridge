@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as datetime_time, timedelta
+import time
 
 import pandas as pd
 from fastapi import FastAPI
@@ -22,7 +23,11 @@ from shioaji_bridge import bridge
 
 
 DEFAULT_REPORT_DAYS = 30
+DAILY_MA_WARMUP_DAYS = 120
+WEEKLY_MA_WARMUP_DAYS = 450
 MIN_COMPLETE_1M_ROWS = 240
+SYNC_MAX_DAYS = 30
+MARKET_INTRADAY_CUTOFF = datetime_time(13, 35)
 TIMEFRAME_1M = "1m"
 TIMEFRAME_1D = "1d"
 TIMEFRAME_1W = "1w"
@@ -58,15 +63,35 @@ def _safe_ratio(a, b):
 
 def _parse_report_dates(start_date: str | None, end_date: str | None):
     today = date.today()
-    parsed_end = date.fromisoformat(end_date) if end_date else today
-    parsed_start = date.fromisoformat(start_date) if start_date else parsed_end - timedelta(days=DEFAULT_REPORT_DAYS)
+    display_end = date.fromisoformat(end_date) if end_date else today
+    display_start = date.fromisoformat(start_date) if start_date else display_end - timedelta(days=DEFAULT_REPORT_DAYS)
 
-    if parsed_start > parsed_end:
+    if display_start > display_end:
         raise ValueError("start_date cannot be later than end_date")
 
-    start_dt = datetime.combine(parsed_start, datetime.min.time())
-    end_exclusive = datetime.combine(parsed_end + timedelta(days=1), datetime.min.time())
-    return parsed_start, parsed_end, start_dt, end_exclusive
+    display_start_dt = datetime.combine(display_start, datetime.min.time())
+    display_end_exclusive = datetime.combine(display_end + timedelta(days=1), datetime.min.time())
+    return display_start, display_end, display_start_dt, display_end_exclusive
+
+
+def _calc_date_ranges(display_start: date, display_end: date):
+    daily_calc_start = display_end - timedelta(days=DAILY_MA_WARMUP_DAYS)
+    weekly_calc_start = display_end - timedelta(days=WEEKLY_MA_WARMUP_DAYS)
+    calc_start = min(daily_calc_start, weekly_calc_start)
+    calc_start_dt = datetime.combine(calc_start, datetime.min.time())
+    calc_end_exclusive = datetime.combine(display_end + timedelta(days=1), datetime.min.time())
+
+    return {
+        "display_start": display_start,
+        "display_end": display_end,
+        "daily_calc_start": daily_calc_start,
+        "weekly_calc_start": weekly_calc_start,
+        "calc_start": calc_start,
+        "calc_end": display_end,
+        "calc_start_dt": calc_start_dt,
+        "calc_end_exclusive": calc_end_exclusive,
+        "uses_warmup": calc_start < display_start,
+    }
 
 
 def _calendar_dates(start: date, end: date):
@@ -82,6 +107,11 @@ def _calendar_dates(start: date, end: date):
 
 def _weekday_dates(start: date, end: date):
     return [d for d in _calendar_dates(start, end) if d.weekday() < 5]
+
+
+def _is_intraday_today(target_date: date):
+    now = datetime.now()
+    return target_date == now.date() and now.time() < MARKET_INTRADAY_CUTOFF
 
 
 def _counts_by_date(df):
@@ -119,12 +149,26 @@ def _fetch_required_weekday_ranges(db_df, start: date, end: date):
     fetch_dates = [
         d
         for d in _weekday_dates(start, end)
-        if db_counts.get(d, 0) < MIN_COMPLETE_1M_ROWS
+        if not _is_intraday_today(d) and db_counts.get(d, 0) < MIN_COMPLETE_1M_ROWS
     ]
     return _compact_date_ranges(fetch_dates)
 
 
-def _build_data_coverage(start: date, end: date, db_df, final_df, fetched_frames):
+def _expand_date_ranges(ranges):
+    dates = []
+
+    for range_start, range_end in ranges:
+        current = range_start
+
+        while current <= range_end:
+            if current.weekday() < 5:
+                dates.append(current)
+            current += timedelta(days=1)
+
+    return dates
+
+
+def _build_data_coverage(start: date, end: date, db_df, final_df, fetched_frames, fetch_suppressed: bool = False):
     db_counts = _counts_by_date(db_df)
     final_counts = _counts_by_date(final_df)
     fetched_counts = {}
@@ -137,14 +181,25 @@ def _build_data_coverage(start: date, end: date, db_df, final_df, fetched_frames
 
     for current in _calendar_dates(start, end):
         is_weekday = current.weekday() < 5
+        is_intraday = is_weekday and _is_intraday_today(current)
         db_count = int(db_counts.get(current, 0))
         fetched_count = int(fetched_counts.get(current, 0))
         final_count = int(final_counts.get(current, 0))
-        was_fetch_attempted = is_weekday and db_count < MIN_COMPLETE_1M_ROWS
+        is_missing_or_sparse = is_weekday and not is_intraday and db_count < MIN_COMPLETE_1M_ROWS
+        was_fetch_attempted = is_missing_or_sparse and not fetch_suppressed
 
         if not is_weekday:
             source = "none"
             status = "非交易日"
+        elif is_intraday and final_count > 0:
+            source = "mixed" if db_count > 0 and fetched_count > 0 else "database" if db_count > 0 else "shioaji"
+            status = "盤中資料"
+        elif is_intraday and final_count == 0:
+            source = "none"
+            status = "盤中尚無資料"
+        elif fetch_suppressed and is_missing_or_sparse:
+            source = "database" if db_count > 0 else "none"
+            status = "資料缺口，待 sync/backfill"
         elif final_count == 0 and was_fetch_attempted:
             source = "shioaji"
             status = "可能國定假日 / 休市 / Shioaji 無資料"
@@ -175,15 +230,38 @@ def _build_data_coverage(start: date, end: date, db_df, final_df, fetched_frames
     return rows
 
 
+def _filter_df_between_dates(df, start: date, end: date):
+    if df is None or df.empty:
+        return df
+
+    filtered = df.copy()
+    filtered["ts"] = pd.to_datetime(filtered["ts"])
+    mask = (filtered["ts"].dt.date >= start) & (filtered["ts"].dt.date <= end)
+    return filtered.loc[mask].sort_values("ts").reset_index(drop=True)
+
+
+def _filter_weekly_for_display(df_1w, display_start: date, display_end: date):
+    if df_1w is None or df_1w.empty:
+        return df_1w
+
+    filtered = df_1w.copy()
+    filtered["ts"] = pd.to_datetime(filtered["ts"])
+    week_start = filtered["ts"].dt.date
+    week_end = (filtered["ts"] + pd.Timedelta(days=6)).dt.date
+    mask = (week_start <= display_end) & (week_end >= display_start)
+    return filtered.loc[mask].sort_values("ts").reset_index(drop=True)
+
+
 def _add_ma_columns(df):
     enriched = df.copy()
 
     for col in ["Open", "High", "Low", "Close", "Volume"]:
         enriched[col] = pd.to_numeric(enriched[col], errors="coerce").fillna(0)
 
-    enriched["MA5"] = enriched["Close"].rolling(5).mean().fillna(0)
-    enriched["MA20"] = enriched["Close"].rolling(20).mean().fillna(0)
-    enriched["MA60"] = enriched["Close"].rolling(60).mean().fillna(0)
+    for period in [5, 20, 60]:
+        enriched[f"MA{period}_COUNT"] = enriched["Close"].rolling(period, min_periods=1).count()
+        enriched[f"MA{period}"] = enriched["Close"].rolling(period, min_periods=period).mean()
+
     return enriched
 
 
@@ -235,22 +313,33 @@ def _aggregate_1d_to_1w(df_1d):
     return _add_ma_columns(pd.DataFrame(rows))
 
 
-def _save_higher_timeframes(db, symbol: str, df_1m):
-    df_1d = _aggregate_1m_to_1d(df_1m)
-    df_1w = _aggregate_1d_to_1w(df_1d)
+def _save_higher_timeframes(db, symbol: str, df_1m, display_start: date, display_end: date, persist: bool = True):
+    df_1d_calc = _aggregate_1m_to_1d(df_1m)
+    df_1w_calc = _aggregate_1d_to_1w(df_1d_calc)
 
-    daily_1d = save_daily_price(db, symbol, df_1d, timeframe=TIMEFRAME_1D) if not df_1d.empty else 0
-    daily_1w = save_daily_price(db, symbol, df_1w, timeframe=TIMEFRAME_1W) if not df_1w.empty else 0
-    snapshot_1d = save_technical_snapshot(db, symbol, df_1d, timeframe=TIMEFRAME_1D) if not df_1d.empty else 0
-    snapshot_1w = save_technical_snapshot(db, symbol, df_1w, timeframe=TIMEFRAME_1W) if not df_1w.empty else 0
+    daily_1d = 0
+    daily_1w = 0
+    snapshot_1d = 0
+    snapshot_1w = 0
+
+    if persist:
+        daily_1d = save_daily_price(db, symbol, df_1d_calc, timeframe=TIMEFRAME_1D) if not df_1d_calc.empty else 0
+        daily_1w = save_daily_price(db, symbol, df_1w_calc, timeframe=TIMEFRAME_1W) if not df_1w_calc.empty else 0
+        snapshot_1d = save_technical_snapshot(db, symbol, df_1d_calc, timeframe=TIMEFRAME_1D) if not df_1d_calc.empty else 0
+        snapshot_1w = save_technical_snapshot(db, symbol, df_1w_calc, timeframe=TIMEFRAME_1W) if not df_1w_calc.empty else 0
+
+    df_1d_display = _filter_df_between_dates(df_1d_calc, display_start, display_end)
+    df_1w_display = _filter_weekly_for_display(df_1w_calc, display_start, display_end)
 
     return {
         "daily_price_1d_saved": daily_1d,
         "daily_price_1w_saved": daily_1w,
         "technical_snapshot_1d_saved": snapshot_1d,
         "technical_snapshot_1w_saved": snapshot_1w,
-        "df_1d": df_1d,
-        "df_1w": df_1w,
+        "df_1d": df_1d_display,
+        "df_1w": df_1w_display,
+        "df_1d_calc_count": len(df_1d_calc),
+        "df_1w_calc_count": len(df_1w_calc),
     }
 
 
@@ -415,71 +504,124 @@ def ai_report(code: str, start_date: str | None = None, end_date: str | None = N
     db = SessionLocal()
 
     try:
-        parsed_start, parsed_end, start_dt, end_exclusive = _parse_report_dates(start_date, end_date)
-        db_df = get_daily_price_df_between(db, code, start_dt, end_exclusive, timeframe=TIMEFRAME_1M)
-        fetch_ranges = _fetch_required_weekday_ranges(db_df, parsed_start, parsed_end)
+        display_start, display_end, _display_start_dt, _display_end_exclusive = _parse_report_dates(start_date, end_date)
+        calc_ranges = _calc_date_ranges(display_start, display_end)
+
+        db_calc_df = get_daily_price_df_between(
+            db,
+            code,
+            calc_ranges["calc_start_dt"],
+            calc_ranges["calc_end_exclusive"],
+            timeframe=TIMEFRAME_1M,
+        )
+        display_db_df = _filter_df_between_dates(db_calc_df, display_start, display_end)
+
+        missing_ranges = _fetch_required_weekday_ranges(display_db_df, display_start, display_end)
+        missing_fetch_dates = _expand_date_ranges(missing_ranges)
+        data_quality_warning = bool(missing_fetch_dates)
+        warning_message = "資料不足，請先執行資料同步" if data_quality_warning else None
         fetched_frames = []
 
-        save_stock(db, symbol=code)
+        calc_df = get_daily_price_df_between(
+            db,
+            code,
+            calc_ranges["calc_start_dt"],
+            calc_ranges["calc_end_exclusive"],
+            timeframe=TIMEFRAME_1M,
+        )
+        display_df = _filter_df_between_dates(calc_df, display_start, display_end)
+        higher = _save_higher_timeframes(db, code, calc_df, display_start, display_end, persist=False)
+        data_coverage = _build_data_coverage(
+            display_start,
+            display_end,
+            display_db_df,
+            display_df,
+            fetched_frames,
+            fetch_suppressed=data_quality_warning,
+        )
 
-        for fetch_start, fetch_end in fetch_ranges:
-            fetched_df = bridge.get_kbars(
+        initial_display_db_count = len(display_db_df)
+        fetched_count = 0
+        data_source = "database" if initial_display_db_count > 0 else "none"
+
+        daily_warmup_sufficient = higher["df_1d_calc_count"] >= 60
+        weekly_warmup_sufficient = higher["df_1w_calc_count"] >= 60
+        warmup_warning = None
+
+        if not daily_warmup_sufficient or not weekly_warmup_sufficient:
+            warmup_warning = "warm-up 資料不足，請先執行 sync/backfill"
+
+        calculation_meta = {
+            "display_start": display_start.isoformat(),
+            "display_end": display_end.isoformat(),
+            "daily_calc_start": calc_ranges["daily_calc_start"].isoformat(),
+            "daily_calc_end": display_end.isoformat(),
+            "weekly_calc_start": calc_ranges["weekly_calc_start"].isoformat(),
+            "weekly_calc_end": display_end.isoformat(),
+            "calc_start": calc_ranges["calc_start"].isoformat(),
+            "calc_end": display_end.isoformat(),
+            "uses_warmup": calc_ranges["uses_warmup"],
+            "one_minute_rows_for_calc": len(calc_df),
+            "daily_k_count_for_ma": higher["df_1d_calc_count"],
+            "weekly_k_count_for_ma": higher["df_1w_calc_count"],
+            "daily_warmup_sufficient": daily_warmup_sufficient,
+            "weekly_warmup_sufficient": weekly_warmup_sufficient,
+            "warmup_warning": warmup_warning,
+            "missing_trading_days": [d.isoformat() for d in missing_fetch_dates],
+            "data_quality_warning": data_quality_warning,
+            "message": warning_message,
+        }
+
+        if display_df.empty:
+            md = generate_ai_markdown(
                 code,
-                start=fetch_start.isoformat(),
-                end=fetch_end.isoformat(),
+                display_df,
+                start_date=display_start.isoformat(),
+                end_date=display_end.isoformat(),
+                data_source=data_source,
+                data_coverage=data_coverage,
+                daily_ma_df=higher["df_1d"],
+                weekly_ma_df=higher["df_1w"],
+                calculation_meta=calculation_meta,
             )
+            db.commit()
 
-            if fetched_df is None or fetched_df.empty:
-                continue
-
-            fetched_frames.append(fetched_df)
-            save_daily_price(db, code, fetched_df, timeframe=TIMEFRAME_1M)
-
-        db.commit()
-
-        report_df = get_daily_price_df_between(db, code, start_dt, end_exclusive, timeframe=TIMEFRAME_1M)
-
-        if report_df.empty:
             return {
-                "error": "no_data",
                 "code": code,
-                "start_date": parsed_start.isoformat(),
-                "end_date": parsed_end.isoformat(),
-                "data_source": "none",
+                "report": md,
+                "error": "no_data",
+                "saved": False,
+                "source": data_source,
+                "data_source": data_source,
+                "start_date": display_start.isoformat(),
+                "end_date": display_end.isoformat(),
+                "timeframe": TIMEFRAME_1M,
+                "db_rows_used": 0,
+                "shioaji_rows_fetched": fetched_count,
+                "fetched_ranges": [],
+                "missing_ranges": [
+                    {"start_date": item[0].isoformat(), "end_date": item[1].isoformat()}
+                    for item in missing_ranges
+                ],
+                "data_quality_warning": data_quality_warning,
+                "message": warning_message,
+                "data_coverage": data_coverage,
+                "calculation_meta": calculation_meta,
             }
 
-        analyzed_df = add_indicators_v2(report_df)
-        snapshot_1m_count = save_technical_snapshot(db, code, analyzed_df, timeframe=TIMEFRAME_1M)
-        higher = _save_higher_timeframes(db, code, report_df)
-        data_coverage = _build_data_coverage(parsed_start, parsed_end, db_df, report_df, fetched_frames)
-
-        initial_db_count = len(db_df)
-        fetched_count = sum(len(frame) for frame in fetched_frames)
-
-        if fetched_count == 0:
-            data_source = "database"
-        elif initial_db_count == 0:
-            data_source = "shioaji"
-        else:
-            data_source = "mixed"
-
-        fetched_ranges = [
-            {
-                "start_date": fetch_start.isoformat(),
-                "end_date": fetch_end.isoformat(),
-            }
-            for fetch_start, fetch_end in fetch_ranges
-        ]
+        analyzed_display_df = add_indicators_v2(display_df)
+        snapshot_1m_count = 0
 
         md = generate_ai_markdown(
             code,
-            analyzed_df,
-            start_date=parsed_start.isoformat(),
-            end_date=parsed_end.isoformat(),
+            analyzed_display_df,
+            start_date=display_start.isoformat(),
+            end_date=display_end.isoformat(),
             data_source=data_source,
             data_coverage=data_coverage,
             daily_ma_df=higher["df_1d"],
             weekly_ma_df=higher["df_1w"],
+            calculation_meta=calculation_meta,
         )
 
         report_id = save_ai_report(
@@ -487,8 +629,8 @@ def ai_report(code: str, start_date: str | None = None, end_date: str | None = N
             code,
             md,
             source=data_source,
-            start_date=parsed_start.isoformat(),
-            end_date=parsed_end.isoformat(),
+            start_date=display_start.isoformat(),
+            end_date=display_end.isoformat(),
             timeframe=TIMEFRAME_1M,
         )
 
@@ -508,13 +650,20 @@ def ai_report(code: str, start_date: str | None = None, end_date: str | None = N
             "daily_price_1w_saved": higher["daily_price_1w_saved"],
             "source": data_source,
             "data_source": data_source,
-            "start_date": parsed_start.isoformat(),
-            "end_date": parsed_end.isoformat(),
+            "start_date": display_start.isoformat(),
+            "end_date": display_end.isoformat(),
             "timeframe": TIMEFRAME_1M,
-            "db_rows_used": len(report_df),
+            "db_rows_used": len(display_df),
             "shioaji_rows_fetched": fetched_count,
-            "fetched_ranges": fetched_ranges,
+            "fetched_ranges": [],
+            "missing_ranges": [
+                {"start_date": item[0].isoformat(), "end_date": item[1].isoformat()}
+                for item in missing_ranges
+            ],
+            "data_quality_warning": data_quality_warning,
+            "message": warning_message,
             "data_coverage": data_coverage,
+            "calculation_meta": calculation_meta,
             "db": db_snapshot,
         }
     except Exception as e:
@@ -631,40 +780,90 @@ def get_ai_payload(symbol: str):
 
 
 @app.post("/api/sync/{symbol}")
-def sync_stock_data(symbol: str):
+def sync_stock_data(symbol: str, start_date: str | None = None, end_date: str | None = None):
     symbol = symbol.strip()
     print(f"Syncing {symbol} to MySQL...")
 
     db = SessionLocal()
+    started_at = time.perf_counter()
 
     try:
-        df = bridge.get_kbars(symbol)
+        sync_end = date.fromisoformat(end_date) if end_date else date.today()
+        sync_start = date.fromisoformat(start_date) if start_date else sync_end - timedelta(days=DEFAULT_REPORT_DAYS - 1)
+        sync_days = (sync_end - sync_start).days + 1
+
+        if sync_start > sync_end:
+            return {
+                "success": False,
+                "symbol": symbol,
+                "error": "start_date cannot be later than end_date",
+                "elapsed_seconds": round(time.perf_counter() - started_at, 2),
+            }
+
+        if sync_days > SYNC_MAX_DAYS:
+            return {
+                "success": False,
+                "symbol": symbol,
+                "start_date": sync_start.isoformat(),
+                "end_date": sync_end.isoformat(),
+                "max_days": SYNC_MAX_DAYS,
+                "requested_days": sync_days,
+                "error": f"sync range too large; max {SYNC_MAX_DAYS} days",
+                "message": f"單次 sync 最多允許 {SYNC_MAX_DAYS} 天，請縮小區間或分批同步",
+                "elapsed_seconds": round(time.perf_counter() - started_at, 2),
+            }
+
+        df = bridge.get_kbars(
+            symbol,
+            start=sync_start.isoformat(),
+            end=sync_end.isoformat(),
+        )
 
         if df is None or df.empty:
             return {
                 "success": False,
                 "symbol": symbol,
+                "start_date": sync_start.isoformat(),
+                "end_date": sync_end.isoformat(),
                 "error": "no_data",
+                "elapsed_seconds": round(time.perf_counter() - started_at, 2),
             }
 
         df_analyzed = add_indicators_v2(df)
 
         save_stock(db, symbol=symbol)
-        daily_count = save_daily_price(db, symbol, df_analyzed, timeframe=TIMEFRAME_1M)
+        daily_count = save_daily_price(db, symbol, df, timeframe=TIMEFRAME_1M)
         snapshot_count = save_technical_snapshot(db, symbol, df_analyzed, timeframe=TIMEFRAME_1M)
-        higher = _save_higher_timeframes(db, symbol, df)
+
+        calc_ranges = _calc_date_ranges(sync_start, sync_end)
+        calc_df = get_daily_price_df_between(
+            db,
+            symbol,
+            calc_ranges["calc_start_dt"],
+            calc_ranges["calc_end_exclusive"],
+            timeframe=TIMEFRAME_1M,
+        )
+        higher = _save_higher_timeframes(db, symbol, calc_df, sync_start, sync_end, persist=True)
 
         db.commit()
 
         return {
             "success": True,
             "symbol": symbol,
+            "start_date": sync_start.isoformat(),
+            "end_date": sync_end.isoformat(),
+            "timeframe": TIMEFRAME_1M,
+            "fetched_rows": len(df),
+            "saved_1m_rows": daily_count,
             "daily_price_saved": daily_count,
             "technical_snapshot_saved": snapshot_count,
+            "saved_1d_rows": higher["daily_price_1d_saved"],
+            "saved_1w_rows": higher["daily_price_1w_saved"],
             "daily_price_1d_saved": higher["daily_price_1d_saved"],
             "daily_price_1w_saved": higher["daily_price_1w_saved"],
             "technical_snapshot_1d_saved": higher["technical_snapshot_1d_saved"],
             "technical_snapshot_1w_saved": higher["technical_snapshot_1w_saved"],
+            "elapsed_seconds": round(time.perf_counter() - started_at, 2),
         }
     except Exception as e:
         db.rollback()
@@ -672,6 +871,7 @@ def sync_stock_data(symbol: str):
             "success": False,
             "symbol": symbol,
             "error": str(e),
+            "elapsed_seconds": round(time.perf_counter() - started_at, 2),
         }
     finally:
         db.close()

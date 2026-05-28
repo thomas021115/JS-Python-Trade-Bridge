@@ -11,9 +11,10 @@ MAX_DAILY_SAMPLE_ROWS = 120
 
 def _num(value: Any, digits: int = 2) -> float:
     try:
-        if value is None or not math.isfinite(float(value)):
+        numeric = float(value)
+        if value is None or pd.isna(value) or not math.isfinite(numeric):
             return 0.0
-        return round(float(value), digits)
+        return round(numeric, digits)
     except (TypeError, ValueError):
         return 0.0
 
@@ -33,7 +34,7 @@ def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
 
 def _format_coverage_rows(data_coverage: list[dict[str, Any]] | None) -> str:
     if not data_coverage:
-        return "目前沒有資料覆蓋狀態。"
+        return "尚無資料覆蓋狀態。"
 
     lines = [
         "| 日期 | 是否交易日 | K 線資料筆數 | 來源 | 狀態 | DB 原始筆數 | 本次補抓筆數 |",
@@ -56,6 +57,40 @@ def _format_coverage_rows(data_coverage: list[dict[str, Any]] | None) -> str:
     return "\n".join(lines)
 
 
+def _format_bool(value: Any) -> str:
+    return "是" if value else "否"
+
+
+def _format_calculation_meta(meta: dict[str, Any] | None) -> str:
+    if not meta:
+        return "尚無指標計算資料範圍。"
+
+    rows = [
+        ("使用者顯示區間", f"{meta.get('display_start', '-')} ~ {meta.get('display_end', '-')}"),
+        ("日 K MA 計算用區間", f"{meta.get('daily_calc_start', '-')} ~ {meta.get('daily_calc_end', '-')}"),
+        ("週 K MA 計算用區間", f"{meta.get('weekly_calc_start', '-')} ~ {meta.get('weekly_calc_end', '-')}"),
+        ("是否使用 warm-up 歷史資料", _format_bool(meta.get("uses_warmup"))),
+        ("1m 計算可用筆數", meta.get("one_minute_rows_for_calc", 0)),
+        ("日 K 實際使用根數", meta.get("daily_k_count_for_ma", 0)),
+        ("週 K 實際使用根數", meta.get("weekly_k_count_for_ma", 0)),
+        ("日 K warm-up 是否足夠", _format_bool(meta.get("daily_warmup_sufficient"))),
+        ("週 K warm-up 是否足夠", _format_bool(meta.get("weekly_warmup_sufficient"))),
+    ]
+
+    if meta.get("data_quality_warning"):
+        rows.append(("資料缺口警告", meta.get("message") or "資料不足，請先執行資料同步"))
+
+    if meta.get("warmup_warning"):
+        rows.append(("warm-up 警告", meta.get("warmup_warning")))
+
+    lines = [
+        "| 項目 | 值 |",
+        "| :--- | :--- |",
+    ]
+    lines.extend(f"| {name} | {value} |" for name, value in rows)
+    return "\n".join(lines)
+
+
 def _format_range_summary(df: pd.DataFrame) -> str:
     first = df.iloc[0]
     last = df.iloc[-1]
@@ -64,21 +99,21 @@ def _format_range_summary(df: pd.DataFrame) -> str:
     grouped_days = df["ts"].dt.date.nunique()
 
     rows = [
-        ("區間第一筆時間", first.get("ts")),
-        ("區間最後一筆時間", last.get("ts")),
-        ("區間交易日數", grouped_days),
-        ("區間 K 線筆數", len(df)),
+        ("第一筆時間", first.get("ts")),
+        ("最後一筆時間", last.get("ts")),
+        ("涵蓋交易日數", grouped_days),
+        ("1m K 線筆數", len(df)),
         ("區間開盤", _num(first.get("Open"))),
         ("區間最高", _num(df["High"].max())),
         ("區間最低", _num(df["Low"].min())),
         ("區間最後收盤", _num(last.get("Close"))),
-        ("區間收盤變化", close_change),
-        ("區間收盤變化百分比", f"{close_change_pct}%"),
+        ("區間變化", close_change),
+        ("區間變化百分比", f"{close_change_pct}%"),
         ("區間總量", int(_num(df["Volume"].sum(), 0))),
     ]
 
     lines = [
-        "| 欄位 | 值 |",
+        "| 項目 | 值 |",
         "| :--- | :--- |",
     ]
     lines.extend(f"| {name} | {value} |" for name, value in rows)
@@ -87,7 +122,7 @@ def _format_range_summary(df: pd.DataFrame) -> str:
 
 def _format_daily_ohlcv_summary(df: pd.DataFrame) -> str:
     lines = [
-        "| 日期 | 第一筆時間 | 最後一筆時間 | 筆數 | 開盤 | 最高 | 最低 | 收盤 | 總量 |",
+        "| 日期 | 第一筆時間 | 最後一筆時間 | 筆數 | 開盤 | 最高 | 最低 | 收盤 | 量 |",
         "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
 
@@ -145,13 +180,23 @@ def _format_indicator_snapshot(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def _format_ma_value(row: pd.Series, period: int) -> str:
+    value = row.get(f"MA{period}")
+    current_count = int(row.get(f"MA{period}_COUNT", 0) or 0)
+
+    if value is None or pd.isna(value):
+        return f"N/A（需 {period}，目前 {current_count}）"
+
+    return str(_num(value, 4))
+
+
 def _format_ma_table(df: pd.DataFrame | None, timeframe: str) -> str:
     if df is None or df.empty:
-        return f"目前沒有 {timeframe} MA 資料。"
+        return f"尚無 {timeframe} MA 資料。"
 
     prepared = _prepare_df(df)
     lines = [
-        "| 時間 | 開盤 | 最高 | 最低 | 收盤 | 量 | MA5 | MA20 | MA60 |",
+        "| 日期 | 開盤 | 最高 | 最低 | 收盤 | 量 | MA5 | MA20 | MA60 |",
         "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
 
@@ -164,9 +209,9 @@ def _format_ma_table(df: pd.DataFrame | None, timeframe: str) -> str:
                 low=_num(row["Low"]),
                 close=_num(row["Close"]),
                 volume=int(_num(row["Volume"], 0)),
-                ma5=_num(row.get("MA5")),
-                ma20=_num(row.get("MA20")),
-                ma60=_num(row.get("MA60")),
+                ma5=_format_ma_value(row, 5),
+                ma20=_format_ma_value(row, 20),
+                ma60=_format_ma_value(row, 60),
             )
         )
 
@@ -176,7 +221,7 @@ def _format_ma_table(df: pd.DataFrame | None, timeframe: str) -> str:
 def _format_levels(df: pd.DataFrame) -> str:
     last = df.iloc[-1]
     return "\n".join([
-        "| 類型 | 第一 | 第二 | 第三 |",
+        "| 類型 | 價位 1 | 價位 2 | 價位 3 |",
         "| :--- | ---: | ---: | ---: |",
         f"| 支撐 | {_num(last.get('SUPPORT_1'))} | {_num(last.get('SUPPORT_2'))} | {_num(last.get('SUPPORT_3'))} |",
         f"| 壓力 | {_num(last.get('RESIST_1'))} | {_num(last.get('RESIST_2'))} | {_num(last.get('RESIST_3'))} |",
@@ -185,7 +230,7 @@ def _format_levels(df: pd.DataFrame) -> str:
 
 def _format_one_minute_rows(df: pd.DataFrame) -> str:
     if df.empty:
-        return "查詢區間內沒有可列出的 1 分 K 線。"
+        return "本區間內沒有可列出的 1 分 K 線資料。"
 
     sections = []
 
@@ -224,8 +269,10 @@ def generate_ai_markdown(
     data_coverage: list[dict[str, Any]] | None = None,
     daily_ma_df: pd.DataFrame | None = None,
     weekly_ma_df: pd.DataFrame | None = None,
+    calculation_meta: dict[str, Any] | None = None,
 ) -> str:
     coverage_table = _format_coverage_rows(data_coverage)
+    calculation_range = _format_calculation_meta(calculation_meta)
     date_range = f"{start_date or '-'} ~ {end_date or '-'}"
     source_label = data_source or "unknown"
 
@@ -240,8 +287,10 @@ def generate_ai_markdown(
 ## 1. 資料覆蓋狀態
 {coverage_table}
 
-查詢區間內沒有可分析的 K 線資料。
-"""
+## 2. 指標計算資料範圍
+{calculation_range}
+
+本區間內沒有可分析的 1 分 K 線資料。"""
 
     prepared = _prepare_df(df)
     last = prepared.iloc[-1]
@@ -256,24 +305,27 @@ def generate_ai_markdown(
 ## 1. 資料覆蓋狀態
 {coverage_table}
 
-## 2. 區間統計摘要
+## 2. 指標計算資料範圍
+{calculation_range}
+
+## 3. 區間統計摘要
 {_format_range_summary(prepared)}
 
-## 3. 每日 OHLCV 摘要
+## 4. 每日 OHLCV 摘要
 {_format_daily_ohlcv_summary(prepared)}
 
-## 4. 1m 技術指標快照
+## 5. 1m 技術指標快照
 {_format_indicator_snapshot(prepared)}
 
-## 5. 日 K MA5 / MA20 / MA60
+## 6. 日 K MA5 / MA20 / MA60
 {_format_ma_table(daily_ma_df, "1d")}
 
-## 6. 週 K MA5 / MA20 / MA60
+## 7. 週 K MA5 / MA20 / MA60
 {_format_ma_table(weekly_ma_df, "1w")}
 
-## 7. 支撐與壓力
+## 8. 支撐壓力
 {_format_levels(prepared)}
 
-## 8. 每日 1 分 K 線樣本
+## 9. 每日 1 分 K 線樣本
 {_format_one_minute_rows(prepared)}
 """

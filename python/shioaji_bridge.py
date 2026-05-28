@@ -65,7 +65,7 @@ class ShioajiBridge:
         self._ensure_connected()
 
         contract = None
-        for _ in range(3):
+        for _ in range(2):
             try:
                 contract = self.api.Contracts.Stocks[contract_code]
                 break
@@ -83,7 +83,9 @@ class ShioajiBridge:
         start_date = start or (today - datetime.timedelta(days=30)).isoformat()
         end_date = end or (today + datetime.timedelta(days=1)).isoformat()
 
-        print(f"Fetching kbars: {contract_code} {start_date} ~ {end_date}")
+        started_at = time.perf_counter()
+        started_time = datetime.datetime.now().isoformat(timespec="seconds")
+        print(f"Fetching kbars start: code={contract_code}, start={start_date}, end={end_date}, at={started_time}")
 
         try:
             kbars = self.api.kbars(contract, start=start_date, end=end_date)
@@ -97,17 +99,20 @@ class ShioajiBridge:
             })
 
             if df.empty:
-                print("No kbar data returned")
+                elapsed = time.perf_counter() - started_at
+                print(f"Fetching kbars empty: code={contract_code}, elapsed={elapsed:.2f}s")
                 return None
 
             df["Close"] = df["Close"].astype(float)
             df["Volume"] = df["Volume"].astype(int)
 
-            print(f"Fetched {len(df)} kbar rows")
+            elapsed = time.perf_counter() - started_at
+            print(f"Fetching kbars done: code={contract_code}, rows={len(df)}, elapsed={elapsed:.2f}s")
             return df
 
         except Exception as e:
-            print(f"Failed to fetch kbars: {e}")
+            elapsed = time.perf_counter() - started_at
+            print(f"Fetching kbars failed: code={contract_code}, elapsed={elapsed:.2f}s, error={e}")
             return None
 
     def get_stock_positions(self):

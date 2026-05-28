@@ -112,7 +112,14 @@ def save_daily_price(db, symbol: str, df, timeframe: str = "1m"):
 
 
 def _float_value(row, key: str):
-    return float(row[key]) if key in row else 0.0
+    if key not in row:
+        return None
+
+    value = row[key]
+    if pd.isna(value):
+        return None
+
+    return float(value)
 
 
 def save_technical_snapshot(db, symbol: str, df, timeframe: str = "1m"):
