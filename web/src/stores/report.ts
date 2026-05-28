@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { api } from '@/services/api';
 import { downloadMarkdown, buildReportFilename } from '@/utils/download';
 import { toast } from 'vue3-toastify';
-import type { AiReportResponse, SyncResponse } from '@/services/api';
+import type { AiReportResponse, SyncResponse, SyncStatusResponse } from '@/services/api';
 
 function formatDate(date: Date) {
   const yyyy = date.getFullYear();
@@ -26,7 +26,9 @@ export const useReport = defineStore('report', {
     loadingReport: false,
     errorMsg: null as string | null,
     syncing: false,
+    checkingSyncStatus: false,
     syncResult: null as SyncResponse | null,
+    syncStatus: null as SyncStatusResponse | null,
     syncErrorMsg: null as string | null,
   }),
   actions: {
@@ -67,10 +69,32 @@ export const useReport = defineStore('report', {
     },
     async syncData() {
       this.syncing = true;
+      this.checkingSyncStatus = true;
       this.syncErrorMsg = null;
       this.syncResult = null;
 
       try {
+        const status = await api.getSyncStatus(this.symbol, this.startDate, this.endDate);
+        this.syncStatus = status;
+
+        if (!status.success) {
+          this.syncErrorMsg = status.message ?? status.error ?? '同步狀態檢查失敗';
+          toast.error(this.syncErrorMsg);
+          return;
+        }
+
+        if (!status.needs_sync) {
+          toast.info('資料已完整，不需要同步');
+          return;
+        }
+
+        if (status.can_sync_once === false) {
+          this.syncErrorMsg = status.message ?? '同步區間超過 30 天，請縮小範圍';
+          toast.error(this.syncErrorMsg);
+          return;
+        }
+
+        this.checkingSyncStatus = false;
         const res = await api.syncStockData(this.symbol, this.startDate, this.endDate);
         this.syncResult = res;
 
@@ -82,10 +106,11 @@ export const useReport = defineStore('report', {
 
         toast.success('資料同步完成');
       } catch (err) {
-        this.syncErrorMsg = '同步資料失敗，請確認 Shioaji 連線或後端服務';
+        this.syncErrorMsg = '同步資料失敗，請確認後端服務或網路狀態';
         toast.error(this.syncErrorMsg);
         console.log('[store.report syncData catch]', err);
       } finally {
+        this.checkingSyncStatus = false;
         this.syncing = false;
       }
     },

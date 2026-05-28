@@ -14,17 +14,27 @@ const {
   loadingReport,
   errorMsg,
   syncing,
+  checkingSyncStatus,
   syncResult,
+  syncStatus,
   syncErrorMsg,
 } = storeToRefs(s);
 
 const reportText = computed(() => report.value?.report?.trim() ?? '');
 const hasReport = computed(() => reportText.value.length > 0);
 const dataSource = computed(() => report.value?.data_source ?? report.value?.source ?? '-');
-const isBusy = computed(() => loadingReport.value || syncing.value);
+const isBusy = computed(() => loadingReport.value || syncing.value || checkingSyncStatus.value);
 const dataQualityWarning = computed(() => Boolean(report.value?.data_quality_warning));
 const dataQualityMessage = computed(() => report.value?.message ?? '資料不足，請先同步資料');
+const missingDates = computed(() => syncStatus.value?.missing_dates ?? []);
+const coverageRows = computed(() => syncStatus.value?.coverage ?? []);
+const syncStatusLabel = computed(() => {
+  if (!syncStatus.value) return '-';
+  if (syncStatus.value.needs_sync) return 'NEEDS SYNC';
+  return 'COMPLETE';
+});
 const statusLabel = computed(() => {
+  if (checkingSyncStatus.value) return '檢查資料';
   if (syncing.value) return '同步中';
   if (loadingReport.value) return '產生中';
   if (errorMsg.value || syncErrorMsg.value) return '需要確認';
@@ -32,7 +42,9 @@ const statusLabel = computed(() => {
   return '待命';
 });
 const statusTone = computed(() => {
-  if (syncing.value || loadingReport.value) return 'border-sky-300/40 bg-sky-400/10 text-sky-200';
+  if (syncing.value || loadingReport.value || checkingSyncStatus.value) {
+    return 'border-sky-300/40 bg-sky-400/10 text-sky-200';
+  }
   if (errorMsg.value || syncErrorMsg.value) return 'border-rose-300/40 bg-rose-400/10 text-rose-200';
   if (hasReport.value) return 'border-emerald-300/40 bg-emerald-400/10 text-emerald-200';
   return 'border-amber-300/30 bg-amber-300/10 text-amber-100';
@@ -52,6 +64,7 @@ watch([symbol, startDate, endDate], () => {
   syncErrorMsg.value = null;
   report.value = null;
   syncResult.value = null;
+  syncStatus.value = null;
 });
 
 function validateForm(target: 'report' | 'sync') {
@@ -104,7 +117,7 @@ function syncData() {
             AI 技術分析資料包
           </h1>
           <p class="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
-            先同步指定區間資料，再從資料庫產生 Markdown 資料包。同步資料會呼叫 Shioaji，建議盤後或短區間使用，單次最多 30 天。
+            先檢查資料庫覆蓋率，再依需要同步指定區間資料，最後從資料庫產生 Markdown 資料包。同步資料會呼叫 Shioaji，建議盤後或短區間使用，單次最多 30 天。
           </p>
         </div>
 
@@ -114,7 +127,7 @@ function syncData() {
         >
           <span
             class="h-2 w-2 rounded-full"
-            :class="syncing || loadingReport ? 'animate-pulse bg-sky-300' : 'bg-amber-200'"
+            :class="isBusy ? 'animate-pulse bg-sky-300' : 'bg-amber-200'"
           />
           {{ statusLabel }}
         </div>
@@ -198,7 +211,7 @@ function syncData() {
                   class="h-4 w-4 animate-spin rounded-full border-2 border-amber-200/30 border-t-amber-200"
                 />
                 <span v-else class="font-mono">SYNC</span>
-                {{ syncing ? '同步中...' : '同步資料' }}
+                {{ checkingSyncStatus ? '檢查中...' : syncing ? '同步中...' : '同步資料' }}
               </button>
             </div>
           </div>
@@ -237,8 +250,13 @@ function syncData() {
           </div>
 
           <div class="rounded-xl border border-slate-700 bg-black/35 p-4 shadow-lg shadow-black/20">
-            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Report ID</div>
-            <div class="mt-2 font-mono text-2xl font-bold text-white">{{ report?.report_id ?? '-' }}</div>
+            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Sync Status</div>
+            <div
+              class="mt-2 font-mono text-2xl font-bold"
+              :class="syncStatus?.needs_sync ? 'text-amber-200' : syncStatus ? 'text-emerald-200' : 'text-white'"
+            >
+              {{ syncStatusLabel }}
+            </div>
           </div>
 
           <div class="rounded-xl border border-slate-700 bg-black/35 p-4 shadow-lg shadow-black/20">
@@ -249,13 +267,61 @@ function syncData() {
           </div>
 
           <div class="rounded-xl border border-slate-700 bg-black/35 p-4 shadow-lg shadow-black/20">
-            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Sync Status</div>
-            <div class="mt-2 font-mono text-2xl font-bold" :class="syncResult?.success ? 'text-emerald-200' : 'text-white'">
-              {{ syncResult ? (syncResult.success ? 'SUCCESS' : 'FAILED') : '-' }}
-            </div>
+            <div class="text-xs font-medium uppercase tracking-wider text-slate-400">Missing Days</div>
+            <div class="mt-2 font-mono text-2xl font-bold text-white">{{ missingDates.length || '-' }}</div>
           </div>
         </section>
       </div>
+
+      <section
+        v-if="syncStatus"
+        class="mt-6 rounded-xl border border-amber-300/20 bg-slate-950/70 p-5 shadow-lg shadow-black/20"
+      >
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 class="text-sm font-semibold text-white">資料庫覆蓋狀態</h2>
+            <p class="mt-1 text-xs text-slate-400">
+              {{ syncStatus.start_date ?? startDate }} ~ {{ syncStatus.end_date ?? endDate }}
+            </p>
+          </div>
+          <span class="font-mono text-xs text-amber-200/80">
+            {{ syncStatus.message }}
+          </span>
+        </div>
+
+        <div v-if="missingDates.length" class="mt-4 flex flex-wrap gap-2">
+          <span
+            v-for="missingDate in missingDates"
+            :key="missingDate"
+            class="rounded-full border border-amber-300/30 bg-amber-300/10 px-2.5 py-1 font-mono text-xs text-amber-100"
+          >
+            {{ missingDate }}
+          </span>
+        </div>
+
+        <div class="mt-4 overflow-x-auto rounded-lg border border-slate-800">
+          <table class="min-w-full text-left text-xs">
+            <thead class="bg-black/40 text-slate-500">
+              <tr>
+                <th class="px-3 py-2 font-semibold">日期</th>
+                <th class="px-3 py-2 font-semibold">交易日</th>
+                <th class="px-3 py-2 font-semibold">筆數</th>
+                <th class="px-3 py-2 font-semibold">來源</th>
+                <th class="px-3 py-2 font-semibold">狀態</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-slate-300">
+              <tr v-for="row in coverageRows" :key="row.date">
+                <td class="px-3 py-2 font-mono text-amber-100">{{ row.date }}</td>
+                <td class="px-3 py-2">{{ row.is_trading_day ? '是' : '否' }}</td>
+                <td class="px-3 py-2 font-mono">{{ row.kbar_count }}</td>
+                <td class="px-3 py-2 font-mono">{{ row.source }}</td>
+                <td class="px-3 py-2">{{ row.status }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <section
         v-if="syncResult"

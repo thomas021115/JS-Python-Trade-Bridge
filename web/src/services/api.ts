@@ -70,6 +70,33 @@ export interface SyncResponse {
   message?: string;
 }
 
+export interface SyncCoverageRow {
+  date: string;
+  is_trading_day: boolean;
+  db_count: number;
+  fetched_count: number;
+  kbar_count: number;
+  source: string;
+  status: string;
+  fetch_attempted: boolean;
+}
+
+export interface SyncStatusResponse {
+  success: boolean;
+  symbol: string;
+  start_date?: string;
+  end_date?: string;
+  timeframe?: string;
+  needs_sync?: boolean;
+  can_sync_once?: boolean;
+  max_sync_days?: number;
+  range_days?: number;
+  missing_dates?: string[];
+  coverage?: SyncCoverageRow[];
+  error?: string;
+  message?: string;
+}
+
 export interface StockPosition {
   id: number;
   code: string;
@@ -111,6 +138,14 @@ export const api = {
   },
   syncStockData: (symbol: string, startDate?: string, endDate?: string) => {
     return http.post<any, SyncResponse>(`/api/sync/${symbol}`, null, {
+      params: {
+        start_date: startDate,
+        end_date: endDate,
+      },
+    });
+  },
+  getSyncStatus: (symbol: string, startDate?: string, endDate?: string) => {
+    return http.get<any, SyncStatusResponse>(`/api/sync-status/${symbol}`, {
       params: {
         start_date: startDate,
         end_date: endDate,

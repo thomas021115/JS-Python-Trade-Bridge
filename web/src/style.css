@@ -1,1 +1,40 @@
 @import "tailwindcss";
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(212, 175, 55, 0.14), transparent 32%),
+    linear-gradient(135deg, #020617 0%, #030712 42%, #050816 100%);
+  color: #e5e7eb;
+}
+
+body {
+  min-width: 320px;
+  overflow-x: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: #020617;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.34);
+  border: 3px solid #020617;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(245, 213, 110, 0.54);
+}

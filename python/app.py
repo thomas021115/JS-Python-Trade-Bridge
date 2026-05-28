@@ -779,6 +779,67 @@ def get_ai_payload(symbol: str):
         return {"error": str(e), "symbol": symbol}
 
 
+@app.get("/api/sync-status/{symbol}")
+def get_sync_status(symbol: str, start_date: str | None = None, end_date: str | None = None):
+    symbol = symbol.strip()
+    db = SessionLocal()
+
+    try:
+        display_start, display_end, display_start_dt, display_end_exclusive = _parse_report_dates(start_date, end_date)
+        db_df = get_daily_price_df_between(
+            db,
+            symbol,
+            display_start_dt,
+            display_end_exclusive,
+            timeframe=TIMEFRAME_1M,
+        )
+        missing_ranges = _fetch_required_weekday_ranges(db_df, display_start, display_end)
+        missing_dates = [d.isoformat() for d in _expand_date_ranges(missing_ranges)]
+        needs_sync = bool(missing_dates)
+        range_days = (display_end - display_start).days + 1
+        can_sync_once = range_days <= SYNC_MAX_DAYS
+        message = None
+
+        if not can_sync_once:
+            message = "同步區間超過 30 天，請縮小範圍"
+        elif needs_sync:
+            message = "資料不足，請先執行資料同步"
+        else:
+            message = "資料已完整，不需要同步"
+
+        coverage = _build_data_coverage(
+            display_start,
+            display_end,
+            db_df,
+            db_df,
+            [],
+            fetch_suppressed=needs_sync,
+        )
+
+        return {
+            "success": True,
+            "symbol": symbol,
+            "start_date": display_start.isoformat(),
+            "end_date": display_end.isoformat(),
+            "timeframe": TIMEFRAME_1M,
+            "needs_sync": needs_sync,
+            "can_sync_once": can_sync_once,
+            "max_sync_days": SYNC_MAX_DAYS,
+            "range_days": range_days,
+            "missing_dates": missing_dates,
+            "coverage": coverage,
+            "message": message,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "symbol": symbol,
+            "error": str(e),
+        }
+    finally:
+        db.close()
+
+
 @app.post("/api/sync/{symbol}")
 def sync_stock_data(symbol: str, start_date: str | None = None, end_date: str | None = None):
     symbol = symbol.strip()

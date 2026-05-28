@@ -25,7 +25,8 @@ const variantClassMap: Record<Variant, string> = {
 };
 
 const themeClassMap: Record<Theme, string> = {
-  default: 'bg-slate-50',
+  default:
+    'bg-[radial-gradient(circle_at_top_left,rgba(212,175,55,0.10),transparent_34%),linear-gradient(135deg,#020617_0%,#030712_48%,#050816_100%)] text-slate-100',
   aurum:
     'bg-[radial-gradient(circle_at_top_left,rgba(212,175,55,0.16),transparent_34%),linear-gradient(135deg,#020617_0%,#07111f_48%,#0b1020_100%)] text-slate-100',
 };
