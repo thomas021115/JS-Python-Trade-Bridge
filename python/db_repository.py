@@ -13,6 +13,7 @@ def save_ai_report(
     end_date: str | None = None,
     timeframe: str = "1m",
 ):
+    # 儲存產出的 Markdown。這張表是報告紀錄，不是 K 線原始資料。
     sql = text("""
         INSERT INTO ai_report (
             symbol,
@@ -47,6 +48,7 @@ def save_ai_report(
     return result.lastrowid
 
 def save_stock(db, symbol: str, name: str | None = None, market: str | None = None):
+    # 股票基本資料只保留一筆。重複 symbol 會更新名稱或市場。
     sql = text("""
         INSERT INTO stocks (symbol, name, market)
         VALUES (:symbol, :name, :market)
@@ -63,6 +65,7 @@ def save_stock(db, symbol: str, name: str | None = None, market: str | None = No
 
 
 def save_daily_price(db, symbol: str, df, timeframe: str = "1m"):
+    # 寫入 K 線資料。唯一鍵是 symbol + timeframe + ts，所以可以安全 upsert。
     sql = text("""
         INSERT INTO daily_price (
             symbol,
@@ -112,6 +115,7 @@ def save_daily_price(db, symbol: str, df, timeframe: str = "1m"):
 
 
 def _float_value(row, key: str):
+    # 技術指標可能還沒算出來，沒有值就寫 NULL。
     if key not in row:
         return None
 
@@ -123,6 +127,7 @@ def _float_value(row, key: str):
 
 
 def save_technical_snapshot(db, symbol: str, df, timeframe: str = "1m"):
+    # 寫入技術指標快照。日 K、週 K、1 分 K 都靠 timeframe 區分。
     sql = text("""
         INSERT INTO technical_snapshot (
             symbol,
@@ -255,6 +260,7 @@ def save_technical_snapshot(db, symbol: str, df, timeframe: str = "1m"):
     return count
 
 def get_recent_daily_price(db, symbol: str, days: int = 7, timeframe: str = "1m"):
+    # 給 API 快速查最近幾天 K 線用。
     start_time = datetime.now() - timedelta(days=days)
 
     sql = text("""
@@ -299,6 +305,7 @@ def get_recent_daily_price(db, symbol: str, days: int = 7, timeframe: str = "1m"
     return rows
 
 def get_daily_price_between(db, symbol: str, start_time, end_time, timeframe: str = "1m"):
+    # 查指定時間區間。end_time 用小於，避免跨日查詢重複拿到邊界資料。
     sql = text("""
         SELECT
             symbol,
@@ -333,11 +340,13 @@ def get_daily_price_between(db, symbol: str, start_time, end_time, timeframe: st
 
 
 def get_daily_price_df_between(db, symbol: str, start_time, end_time, timeframe: str = "1m"):
+    # app.py 大多用 DataFrame 處理指標和聚合，所以這裡直接包一層轉換。
     rows = get_daily_price_between(db, symbol, start_time, end_time, timeframe=timeframe)
     return daily_price_rows_to_df(rows)
 
 
 def daily_price_rows_to_df(rows):
+    # 把 DB 欄位名稱轉回 pandas 計算時使用的欄位名稱。
     if not rows:
         return pd.DataFrame(columns=["ts", "Open", "High", "Low", "Close", "Volume"])
 

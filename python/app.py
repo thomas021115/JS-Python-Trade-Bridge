@@ -62,6 +62,7 @@ def _safe_ratio(a, b):
 
 
 def _parse_report_dates(start_date: str | None, end_date: str | None):
+    # 把前端日期轉成 date，另外做一組給 SQL 查詢用的 datetime。
     today = date.today()
     display_end = date.fromisoformat(end_date) if end_date else today
     display_start = date.fromisoformat(start_date) if start_date else display_end - timedelta(days=DEFAULT_REPORT_DAYS)
@@ -75,6 +76,7 @@ def _parse_report_dates(start_date: str | None, end_date: str | None):
 
 
 def _calc_date_ranges(display_start: date, display_end: date):
+    # 顯示區間照使用者選擇，指標計算區間會多往前抓 DB 裡的 warm-up 資料。
     daily_calc_start = display_end - timedelta(days=DAILY_MA_WARMUP_DAYS)
     weekly_calc_start = display_end - timedelta(days=WEEKLY_MA_WARMUP_DAYS)
     calc_start = min(daily_calc_start, weekly_calc_start)
@@ -95,6 +97,7 @@ def _calc_date_ranges(display_start: date, display_end: date):
 
 
 def _calendar_dates(start: date, end: date):
+    # 產生包含頭尾的日期清單。
     current = start
     dates = []
 
@@ -106,15 +109,18 @@ def _calendar_dates(start: date, end: date):
 
 
 def _weekday_dates(start: date, end: date):
+    # 這裡先用週一到週五當交易日，國定假日後面再另外補資料源。
     return [d for d in _calendar_dates(start, end) if d.weekday() < 5]
 
 
 def _is_intraday_today(target_date: date):
+    # 今天 13:35 前算盤中，不用因為資料少就判定要同步。
     now = datetime.now()
     return target_date == now.date() and now.time() < MARKET_INTRADAY_CUTOFF
 
 
 def _counts_by_date(df):
+    # 把 K 線資料按日期分組，回傳每天有幾筆。
     if df is None or df.empty:
         return {}
 
@@ -124,6 +130,7 @@ def _counts_by_date(df):
 
 
 def _compact_date_ranges(dates: list[date]):
+    # 把連續缺資料日期合併成區間，方便後面回傳或同步。
     if not dates:
         return []
 
@@ -145,6 +152,7 @@ def _compact_date_ranges(dates: list[date]):
 
 
 def _fetch_required_weekday_ranges(db_df, start: date, end: date):
+    # 檢查哪些平日資料不足。這裡只判斷，不打 Shioaji。
     db_counts = _counts_by_date(db_df)
     fetch_dates = [
         d
@@ -155,6 +163,7 @@ def _fetch_required_weekday_ranges(db_df, start: date, end: date):
 
 
 def _expand_date_ranges(ranges):
+    # 把日期區間展開成單日清單，主要給 API 回傳 missing_dates 用。
     dates = []
 
     for range_start, range_end in ranges:
@@ -169,6 +178,7 @@ def _expand_date_ranges(ranges):
 
 
 def _build_data_coverage(start: date, end: date, db_df, final_df, fetched_frames, fetch_suppressed: bool = False):
+    # 組出每天的資料品質表，Markdown 和 sync-status 都會用到。
     db_counts = _counts_by_date(db_df)
     final_counts = _counts_by_date(final_df)
     fetched_counts = {}
@@ -231,6 +241,7 @@ def _build_data_coverage(start: date, end: date, db_df, final_df, fetched_frames
 
 
 def _filter_df_between_dates(df, start: date, end: date):
+    # 從較大的計算區間裡切出使用者真正要看的顯示區間。
     if df is None or df.empty:
         return df
 
@@ -241,6 +252,7 @@ def _filter_df_between_dates(df, start: date, end: date):
 
 
 def _filter_weekly_for_display(df_1w, display_start: date, display_end: date):
+    # 週 K 用週一當 ts，只要該週有碰到顯示區間就保留。
     if df_1w is None or df_1w.empty:
         return df_1w
 
@@ -253,6 +265,7 @@ def _filter_weekly_for_display(df_1w, display_start: date, display_end: date):
 
 
 def _add_ma_columns(df):
+    # MA 不足期數時保持 NaN，讓報告可以顯示 N/A，而不是假裝是 0。
     enriched = df.copy()
 
     for col in ["Open", "High", "Low", "Close", "Volume"]:
@@ -266,6 +279,7 @@ def _add_ma_columns(df):
 
 
 def _aggregate_1m_to_1d(df_1m):
+    # 從 1 分 K 聚合日 K。open 用第一筆，close 用最後一筆，volume 加總。
     if df_1m is None or df_1m.empty:
         return pd.DataFrame(columns=["ts", "Open", "High", "Low", "Close", "Volume"])
 
@@ -290,6 +304,7 @@ def _aggregate_1m_to_1d(df_1m):
 
 
 def _aggregate_1d_to_1w(df_1d):
+    # 從日 K 聚合週 K。每週用週一當時間戳。
     if df_1d is None or df_1d.empty:
         return pd.DataFrame(columns=["ts", "Open", "High", "Low", "Close", "Volume"])
 
@@ -314,6 +329,7 @@ def _aggregate_1d_to_1w(df_1d):
 
 
 def _save_higher_timeframes(db, symbol: str, df_1m, display_start: date, display_end: date, persist: bool = True):
+    # persist=True 會寫回 DB。report 只要拿來顯示時會用 persist=False。
     df_1d_calc = _aggregate_1m_to_1d(df_1m)
     df_1w_calc = _aggregate_1d_to_1w(df_1d_calc)
 
@@ -500,6 +516,7 @@ def ai_briefing(code: str):
 
 @app.get("/api/ai-report/{code}")
 def ai_report(code: str, start_date: str | None = None, end_date: str | None = None):
+    # 報告 endpoint 只讀 DB，不主動同步 Shioaji。
     code = code.strip()
     db = SessionLocal()
 
@@ -781,6 +798,7 @@ def get_ai_payload(symbol: str):
 
 @app.get("/api/sync-status/{symbol}")
 def get_sync_status(symbol: str, start_date: str | None = None, end_date: str | None = None):
+    # 同步前先查 DB 覆蓋率。這裡不能打 Shioaji。
     symbol = symbol.strip()
     db = SessionLocal()
 
@@ -842,6 +860,7 @@ def get_sync_status(symbol: str, start_date: str | None = None, end_date: str | 
 
 @app.post("/api/sync/{symbol}")
 def sync_stock_data(symbol: str, start_date: str | None = None, end_date: str | None = None):
+    # 同步 endpoint 才會打 Shioaji，並把 1m、1d、1w 寫回 DB。
     symbol = symbol.strip()
     print(f"Syncing {symbol} to MySQL...")
 
